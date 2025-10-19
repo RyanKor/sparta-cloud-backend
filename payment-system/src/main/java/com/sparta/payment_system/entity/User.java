@@ -4,6 +4,9 @@ import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.hibernate.annotations.CreationTimestamp;
+
+import java.time.LocalDateTime;
 
 @Entity
 @Table(name = "users")
@@ -14,16 +17,25 @@ public class User {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+    @Column(name = "user_id")
+    private Long userId;
 
     @Column(nullable = false, unique = true)
-    private String username;
-
-    @Column(nullable = false)
     private String email;
 
-    public User(String username, String email) {
-        this.username = username;
+    @Column(name = "password_hash", nullable = false)
+    private String passwordHash;
+
+    @Column(name = "name")
+    private String name;
+
+    @CreationTimestamp
+    @Column(name = "created_at", nullable = false, updatable = false)
+    private LocalDateTime createdAt;
+
+    public User(String email, String passwordHash, String name) {
         this.email = email;
+        this.passwordHash = passwordHash;
+        this.name = name;
     }
 }
