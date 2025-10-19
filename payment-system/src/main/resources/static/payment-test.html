@@ -4,7 +4,35 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PortOne V2 결제 테스트</title>
-    <script src="https://cdn.portone.io/v2/portone-v2-sdk.js"></script>
+    <script src="https://cdn.portone.io/v2/portone-v2-sdk.js" onerror="loadAlternativeSDK()"></script>
+    <script>
+        function loadAlternativeSDK() {
+            console.log('기본 CDN 실패, 대안 CDN 시도 중...');
+            const script = document.createElement('script');
+            script.src = 'https://unpkg.com/@portone/browser-sdk@2/dist/portone-v2-sdk.js';
+            script.onload = function() {
+                console.log('대안 CDN 로드 성공');
+                showResult('PortOne SDK가 대안 CDN으로 로드되었습니다.', 'success');
+            };
+            script.onerror = function() {
+                console.error('모든 CDN 로드 실패');
+                showResult('PortOne SDK 로드 실패. 네트워크 연결을 확인해주세요.', 'error');
+            };
+            document.head.appendChild(script);
+        }
+    </script>
+    <script>
+        // PortOne SDK 로드 확인
+        window.addEventListener('load', function() {
+            if (typeof PortOne === 'undefined') {
+                console.error('PortOne SDK가 로드되지 않았습니다.');
+                showResult('PortOne SDK 로드 실패. 네트워크 연결을 확인해주세요.', 'error');
+            } else {
+                console.log('PortOne SDK 로드 성공');
+                showResult('PortOne SDK가 성공적으로 로드되었습니다.', 'success');
+            }
+        });
+    </script>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -117,6 +145,12 @@
         let lastPaymentId = null;
 
         async function requestPayment() {
+            // PortOne SDK 로드 확인
+            if (typeof PortOne === 'undefined') {
+                showResult('PortOne SDK가 로드되지 않았습니다. 페이지를 새로고침해주세요.', 'error');
+                return;
+            }
+
             const storeId = document.getElementById('storeId').value;
             const channelKey = document.getElementById('channelKey').value;
             const amount = parseInt(document.getElementById('amount').value);
@@ -127,7 +161,7 @@
                 return;
             }
 
-            if (!channelKey || channelKey === 'channel-key-1e30a79e-0207-49a2-ba58-27db0e7276c6') {
+            if (!channelKey) {
                 showResult('채널 키를 입력해주세요.', 'error');
                 return;
             }
@@ -138,6 +172,16 @@
             try {
                 showResult('결제창을 열고 있습니다...', 'info');
                 
+                console.log('결제 요청 파라미터:', {
+                    storeId: storeId,
+                    channelKey: channelKey,
+                    paymentId: paymentId,
+                    orderName: orderName,
+                    totalAmount: amount,
+                    currency: "KRW",
+                    payMethod: "CARD"
+                });
+                
                 const response = await PortOne.requestPayment({
                     storeId: storeId,
                     channelKey: channelKey,
@@ -147,6 +191,8 @@
                     currency: "KRW",
                     payMethod: "CARD",
                 });
+
+                console.log('결제 응답:', response);
 
                 if (response.code) {
                     // 결제 실패 또는 사용자가 창을 닫음
@@ -239,7 +285,13 @@
 
         // 페이지 로드 시 설정 확인
         window.onload = function() {
-            showResult('결제 테스트 페이지가 로드되었습니다. 상점 ID와 채널 키를 확인해주세요.', 'info');
+            setTimeout(() => {
+                if (typeof PortOne !== 'undefined') {
+                    showResult('결제 테스트 페이지가 로드되었습니다. 상점 ID와 채널 키를 입력해주세요.', 'info');
+                } else {
+                    showResult('PortOne SDK 로드 중... 잠시만 기다려주세요.', 'info');
+                }
+            }, 1000);
         };
     </script>
 </body>
