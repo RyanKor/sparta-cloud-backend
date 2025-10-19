@@ -1,7 +1,9 @@
+# DB Diagram IO에서 사용할 ERD 구성 스크립트
+
+```
 //// --------------------------------------
 //// ERD for E-commerce Order/Payment System
 //// --------------------------------------
-
 Table Users as U {
   user_id int [pk, increment]
   email varchar(255) [not null, unique]
@@ -76,3 +78,4 @@ Ref: O.order_id - Pay.order_id // One-to-One
 
 Ref: PM.method_id < Pay.method_id
 Ref: Pay.payment_id < R.payment_id
+```
