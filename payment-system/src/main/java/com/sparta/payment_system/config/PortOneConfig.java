@@ -1,9 +1,7 @@
 package com.sparta.payment_system.config;
 
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.web.reactive.function.client.WebClient;
 
 @Configuration
 public class PortOneConfig {
@@ -14,14 +12,11 @@ public class PortOneConfig {
     @Value("${portone.api.url}")
     private String apiUrl;
     
-    @Bean("portOneWebClient")
-    public WebClient portOneWebClient() {
-        return WebClient.builder()
-                .baseUrl(apiUrl)
-                .defaultHeader("Authorization", "PortOne " + apiSecret)
-                .defaultHeader("Content-Type", "application/json")
-                .build();
-    }
+    @Value("${portone.store.id}")
+    private String storeId;
+    
+    @Value("${portone.channel.key}")
+    private String channelKey;
     
     public String getApiSecret() {
         return apiSecret;
@@ -29,5 +24,13 @@ public class PortOneConfig {
     
     public String getApiUrl() {
         return apiUrl;
+    }
+    
+    public String getStoreId() {
+        return storeId;
+    }
+    
+    public String getChannelKey() {
+        return channelKey;
     }
 }
