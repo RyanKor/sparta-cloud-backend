@@ -21,13 +21,22 @@ public class ProductController {
         this.productRepository = productRepository;
     }
     
+    @GetMapping("/health")
+    public ResponseEntity<String> healthCheck() {
+        return ResponseEntity.ok("Product API is working!");
+    }
+    
     @PostMapping
-    public ResponseEntity<Product> createProduct(@RequestBody Product product) {
+    public ResponseEntity<?> createProduct(@RequestBody Product product) {
         try {
+            System.out.println("상품 생성 요청 받음: " + product);
             Product savedProduct = productRepository.save(product);
+            System.out.println("상품 저장 완료: " + savedProduct);
             return ResponseEntity.ok(savedProduct);
         } catch (Exception e) {
-            return ResponseEntity.badRequest().build();
+            System.err.println("상품 생성 에러: " + e.getMessage());
+            e.printStackTrace();
+            return ResponseEntity.badRequest().body("상품 생성 실패: " + e.getMessage());
         }
     }
     
