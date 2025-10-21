@@ -14,4 +14,11 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
     List<Product> findByPriceBetween(Double minPrice, Double maxPrice);
     
     List<Product> findByStockGreaterThan(Integer stock);
+    
+    // 새로 추가된 메서드들
+    List<Product> findByStatus(Product.ProductStatus status);
+    
+    List<Product> findByCategory(String category);
+    
+    List<Product> findByStockLessThanEqual(Integer stock);
 }
