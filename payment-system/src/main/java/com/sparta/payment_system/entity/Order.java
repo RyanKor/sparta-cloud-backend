@@ -1,5 +1,6 @@
 package com.sparta.payment_system.entity;
 
+import com.fasterxml.jackson.annotation.JsonManagedReference;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -37,10 +38,13 @@ public class Order {
     private LocalDateTime orderedAt;
     
     @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @JsonManagedReference
     private List<OrderItem> orderItems = new ArrayList<>();
     
-    @OneToOne(mappedBy = "order", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
-    private Payment payment;
+    // 외래키 제약조건 문제를 방지하기 위해 일시적으로 주석 처리
+    // @OneToOne(mappedBy = "order", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    // @JsonManagedReference
+    // private Payment payment;
     
     public enum OrderStatus {
         PENDING_PAYMENT, COMPLETED, CANCELLED

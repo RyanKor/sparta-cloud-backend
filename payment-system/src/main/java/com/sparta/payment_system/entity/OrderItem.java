@@ -1,5 +1,6 @@
 package com.sparta.payment_system.entity;
 
+import com.fasterxml.jackson.annotation.JsonBackReference;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -33,9 +34,11 @@ public class OrderItem {
     
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "order_id", insertable = false, updatable = false)
+    @JsonBackReference
     private Order order;
     
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "product_id", insertable = false, updatable = false)
+    @JsonBackReference
     private Product product;
 }

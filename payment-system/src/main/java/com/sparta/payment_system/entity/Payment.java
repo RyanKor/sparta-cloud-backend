@@ -1,5 +1,7 @@
 package com.sparta.payment_system.entity;
 
+import com.fasterxml.jackson.annotation.JsonBackReference;
+import com.fasterxml.jackson.annotation.JsonManagedReference;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -21,7 +23,7 @@ public class Payment {
     @Column(name = "payment_id")
     private Long paymentId;
     
-    @Column(name = "order_id", nullable = false, unique = true, length = 255)
+    @Column(name = "order_id", nullable = false, length = 255)
     private String orderId;
     
     @Column(name = "method_id")
@@ -43,12 +45,15 @@ public class Payment {
     @Column(name = "paid_at")
     private LocalDateTime paidAt;
     
-    @OneToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "order_id", insertable = false, updatable = false)
-    private Order order;
+    // 외래키 제약조건 문제를 방지하기 위해 일시적으로 주석 처리
+    // @OneToOne(fetch = FetchType.LAZY)
+    // @JoinColumn(name = "order_id", referencedColumnName = "order_id", insertable = false, updatable = false)
+    // @JsonBackReference
+    // private Order order;
 
     
     @OneToMany(mappedBy = "payment", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @JsonManagedReference
     private List<Refund> refunds;
     
     public enum PaymentStatus {

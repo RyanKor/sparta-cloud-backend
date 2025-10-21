@@ -3,8 +3,10 @@ package com.sparta.payment_system.service;
 import com.sparta.payment_system.client.PortOneClient;
 import com.sparta.payment_system.entity.Payment;
 import com.sparta.payment_system.entity.Refund;
+import com.sparta.payment_system.entity.Order;
 import com.sparta.payment_system.repository.PaymentRepository;
 import com.sparta.payment_system.repository.RefundRepository;
+import com.sparta.payment_system.repository.OrderRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
@@ -19,12 +21,14 @@ public class PaymentService {
     private final PortOneClient portoneClient;
     private final PaymentRepository paymentRepository;
 	private final RefundRepository refundRepository;
+    private final OrderRepository orderRepository;
 
     @Autowired
-	public PaymentService(PortOneClient portoneClient, PaymentRepository paymentRepository, RefundRepository refundRepository) {
+	public PaymentService(PortOneClient portoneClient, PaymentRepository paymentRepository, RefundRepository refundRepository, OrderRepository orderRepository) {
 		this.portoneClient = portoneClient;
 		this.paymentRepository = paymentRepository;
 		this.refundRepository = refundRepository;
+		this.orderRepository = orderRepository;
 	}
 
     public Mono<Boolean> verifyPayment(String paymentId) {
@@ -57,7 +61,7 @@ public class PaymentService {
                     
                     // 3. 주문 정보 추출
                     String orderName = (String) paymentDetails.get("orderName");
-                    String resolvedOrderId = resolveOrderId(paymentDetails);
+                    String resolvedOrderId = resolveOrderId(paymentDetails, paymentId);
                     
                     System.out.println("결제 검증 성공!");
                     System.out.println("결제 ID: " + paymentId);
@@ -66,7 +70,19 @@ public class PaymentService {
                     System.out.println("결제 금액: " + paidAmount);
                     
                     // 4. DB에 결제 정보 저장
-                    savePaymentToDatabase(paymentId, resolvedOrderId, paidAmount, paymentDetails);
+                    System.out.println("=== 결제 정보 DB 저장 시작 ===");
+                    System.out.println("Payment ID: " + paymentId);
+                    System.out.println("Resolved Order ID: " + resolvedOrderId);
+                    System.out.println("Paid Amount: " + paidAmount);
+                    
+                    try {
+                        savePaymentToDatabase(paymentId, resolvedOrderId, paidAmount, paymentDetails);
+                        System.out.println("=== 결제 정보 DB 저장 완료 ===");
+                    } catch (Exception e) {
+                        System.err.println("결제 정보 DB 저장 중 오류 발생: " + e.getMessage());
+                        e.printStackTrace();
+                        // DB 저장 실패해도 결제 검증은 성공으로 처리
+                    }
                     
                     return true;
                 })
@@ -77,7 +93,7 @@ public class PaymentService {
      * 결제 상세 응답에서 주문 ID를 최대한 안정적으로 추출한다.
      * 우선순위: merchantUid → merchantPaymentId → orderId → customData.orderId → payment.id (fallback)
      */
-    private String resolveOrderId(Map<String, Object> paymentDetails) {
+    private String resolveOrderId(Map<String, Object> paymentDetails, String paymentId) {
         // 1) 흔히 쓰는 키들 시도
         String[] candidateKeys = new String[]{"merchantUid", "merchantPaymentId", "orderId"};
         for (String key : candidateKeys) {
@@ -128,16 +144,52 @@ public class PaymentService {
             return (String) id;
         }
         System.out.println("[경고] 주문 ID를 찾을 수 없어 결제 ID로 대체합니다.");
-        return "unknown-order";
+        return paymentId; // "unknown-order" 대신 실제 paymentId 사용
     }
 
     private void savePaymentToDatabase(String paymentId, String orderId, Integer amount, Map<String, Object> paymentDetails) {
         try {
-            Payment payment = new Payment();
+            System.out.println("savePaymentToDatabase 메서드 호출됨");
+            System.out.println("입력 파라미터 - paymentId: " + paymentId + ", orderId: " + orderId + ", amount: " + amount);
+            
+            // 주문이 존재하는지 먼저 확인
+            Optional<Order> orderOptional = orderRepository.findByOrderId(orderId);
+            if (orderOptional.isEmpty()) {
+                System.out.println("주문을 찾을 수 없습니다. 자동으로 주문을 생성합니다. Order ID: " + orderId);
+                
+                // 주문이 없으면 자동으로 생성
+                Order newOrder = createOrderFromPaymentDetails(orderId, amount, paymentDetails);
+                if (newOrder != null) {
+                    orderRepository.save(newOrder);
+                    System.out.println("새 주문이 생성되었습니다. Order ID: " + orderId);
+                } else {
+                    System.err.println("주문 생성에 실패했습니다. Order ID: " + orderId);
+                    return;
+                }
+            }
+            
+            // 기존 결제가 있는지 확인 (imp_uid로 먼저, 없으면 order_id로)
+            Optional<Payment> existingPayment = paymentRepository.findByImpUid(paymentId);
+            if (existingPayment.isEmpty()) {
+                existingPayment = paymentRepository.findByOrderId(orderId);
+            }
+            
+            Payment payment;
+            if (existingPayment.isPresent()) {
+                // 기존 결제 업데이트
+                payment = existingPayment.get();
+                System.out.println("기존 결제 정보를 업데이트합니다. Payment ID: " + payment.getPaymentId());
+            } else {
+                // 새 결제 생성
+                payment = new Payment();
+                System.out.println("새 결제 정보를 생성합니다.");
+            }
+            
             payment.setOrderId(orderId);
             payment.setImpUid(paymentId);
             payment.setAmount(java.math.BigDecimal.valueOf(amount));
             payment.setStatus(Payment.PaymentStatus.PAID);
+            
             // 결제 수단 설정 (키가 환경에 따라 다를 수 있음)
             Object payMethod = paymentDetails.get("payMethod");
             if (payMethod == null) {
@@ -162,6 +214,10 @@ public class PaymentService {
             
             paymentRepository.save(payment);
             System.out.println("결제 정보가 데이터베이스에 저장되었습니다.");
+            
+            // 결제 완료 후 주문 상태를 COMPLETED로 업데이트
+            updateOrderStatusToCompleted(orderId);
+            
         } catch (Exception e) {
             System.err.println("결제 정보 저장 중 오류 발생: " + e.getMessage());
             e.printStackTrace();
@@ -223,7 +279,7 @@ public class PaymentService {
 		// 결제 식별을 위해 우선 impUid(PortOne id)로 조회, 실패 시 orderId로 보조 조회
 		Optional<Payment> paymentOptional = paymentRepository.findByImpUid(idToCancel);
 		if (paymentOptional.isEmpty() && paymentDetails != null) {
-			String resolvedOrderId = resolveOrderId(paymentDetails);
+			String resolvedOrderId = resolveOrderId(paymentDetails, idToCancel);
 			if (resolvedOrderId != null && !resolvedOrderId.isBlank()) {
 				paymentOptional = paymentRepository.findByOrderId(resolvedOrderId);
 			}
@@ -292,4 +348,68 @@ public class PaymentService {
 		}
 		return null;
 	}
+
+    /**
+     * 결제 상세 정보에서 주문을 자동 생성
+     */
+    private Order createOrderFromPaymentDetails(String orderId, Integer amount, Map<String, Object> paymentDetails) {
+        try {
+            Order order = new Order();
+            order.setOrderId(orderId);
+            order.setTotalAmount(java.math.BigDecimal.valueOf(amount));
+            order.setStatus(Order.OrderStatus.PENDING_PAYMENT);
+            
+            // 고객 정보에서 user_id 추출 시도
+            Object customerObj = paymentDetails.get("customer");
+            if (customerObj instanceof Map) {
+                Map<String, Object> customer = (Map<String, Object>) customerObj;
+                Object customerId = customer.get("id");
+                if (customerId instanceof Number) {
+                    order.setUserId(((Number) customerId).longValue());
+                } else if (customerId instanceof String) {
+                    try {
+                        order.setUserId(Long.parseLong((String) customerId));
+                    } catch (NumberFormatException ignored) {
+                        order.setUserId(1L); // 기본값
+                    }
+                } else {
+                    order.setUserId(1L); // 기본값
+                }
+            } else {
+                order.setUserId(1L); // 기본값
+            }
+            
+            System.out.println("자동 생성된 주문 정보:");
+            System.out.println("- Order ID: " + order.getOrderId());
+            System.out.println("- User ID: " + order.getUserId());
+            System.out.println("- Total Amount: " + order.getTotalAmount());
+            System.out.println("- Status: " + order.getStatus());
+            
+            return order;
+        } catch (Exception e) {
+            System.err.println("주문 자동 생성 중 오류 발생: " + e.getMessage());
+            e.printStackTrace();
+            return null;
+        }
+    }
+
+    /**
+     * 결제 완료 후 주문 상태를 COMPLETED로 업데이트
+     */
+    private void updateOrderStatusToCompleted(String orderId) {
+        try {
+            Optional<Order> orderOptional = orderRepository.findByOrderId(orderId);
+            if (orderOptional.isPresent()) {
+                Order order = orderOptional.get();
+                order.setStatus(Order.OrderStatus.COMPLETED);
+                orderRepository.save(order);
+                System.out.println("주문 상태가 COMPLETED로 업데이트되었습니다. Order ID: " + orderId);
+            } else {
+                System.err.println("주문을 찾을 수 없습니다. Order ID: " + orderId);
+            }
+        } catch (Exception e) {
+            System.err.println("주문 상태 업데이트 중 오류 발생: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
 }

@@ -319,19 +319,19 @@
     <h1>🛒 스파르타 스토어</h1>
     <p class="subtitle">아래 상품을 결제하여 플로우를 테스트하세요</p>
 
-    <div class="product">
+    <div class="product" id="productInfo">
         <div class="product-image">IMG</div>
         <div class="product-info">
-            <h3>스파르타 티셔츠 (화이트, M)</h3>
-            <p>부드러운 코튼 100% 티셔츠. 데일리로 착용하기 좋은 베이직 핏.</p>
+            <h3 id="productName">상품 정보 로딩 중...</h3>
+            <p id="productDescription">상품 설명을 불러오고 있습니다.</p>
             <div class="price-row">
-                <span class="price">1,000원</span>
+                <span class="price" id="productPrice">0원</span>
                 <span class="badge">무료배송</span>
             </div>
             <div class="summary">
-                <div class="summary-row"><span>상품 금액</span><strong>1,000원</strong></div>
+                <div class="summary-row"><span>상품 금액</span><strong id="summaryPrice">0원</strong></div>
                 <div class="summary-row"><span>배송비</span><strong>0원</strong></div>
-                <div class="summary-row total"><span>결제 예정 금액</span><strong>1,000원</strong></div>
+                <div class="summary-row total"><span>결제 예정 금액</span><strong id="totalPrice">0원</strong></div>
             </div>
             <p class="helper-text">결제 버튼을 누르면 PortOne 결제창이 열립니다. 테스트 카드 정보를 사용하세요.</p>
         </div>
@@ -341,8 +341,9 @@
         <!-- Hidden technical fields required by the existing JS logic -->
         <input type="hidden" id="orderId" placeholder="order_2024101900001">
         <input type="hidden" id="userId" value="1">
-        <input type="hidden" id="orderName" value="스파르타 티셔츠 (화이트, M)">
-        <input type="hidden" id="amount" value="1000" min="1000">
+        <input type="hidden" id="orderName" value="">
+        <input type="hidden" id="amount" value="0" min="1000">
+        <input type="hidden" id="productId" value="1">
         <div class="hidden-field">
             <select id="paymentMethod">
                 <option value="CARD">신용카드</option>
@@ -350,8 +351,10 @@
         </div>
 
         <div class="actions">
-            <button type="button" class="btn-primary btn-full" onclick="(async (btn)=>{ try { btn.disabled = true; btn.textContent = '처리 중...'; await createOrder(); document.getElementById('paymentForm').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true })); } finally { btn.disabled = false; btn.textContent = '결제하기'; } })(this)">결제하기</button>
-            <button type="button" class="btn-secondary btn-full" onclick="checkOrder()">주문 조회</button>
+            <button type="button" class="btn-primary btn-full" onclick="(async (btn)=>{ try { btn.disabled = true; btn.textContent = '처리 중...'; await createOrderAndPayment(); document.getElementById('paymentForm').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true })); } finally { btn.disabled = false; btn.textContent = '결제하기'; } })(this)">결제하기</button>
+            <button type="button" class="btn-secondary" onclick="checkOrder()">주문 조회</button>
+            <button type="button" class="btn-secondary" onclick="showPaidPayments()">환불 가능 결제 조회</button>
+            <button type="button" class="btn-secondary" onclick="createTestProduct()">테스트 상품 생성</button>
         </div>
     </form>
 
@@ -360,8 +363,8 @@
 
 <script>
     const API_BASE_URL = 'http://localhost:8080';
-    const STORE_ID = '스토어 ID 정보 입력해주세요.';
-    const CHANNEL_KEY = 'KG 이니시스 채널 ID 정보 기입해주세요.';
+    const STORE_ID = '';
+    const CHANNEL_KEY = '';
 
     // 결과 표시 함수
     function showResult(type, title, message, data = null) {
@@ -379,13 +382,48 @@
         resultDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
 
-    // 1. 주문 생성
-    async function createOrder() {
+    // 1. 상품 정보 로드
+    async function loadProductInfo() {
+        const productId = document.getElementById('productId').value;
+        
+        try {
+            showResult('info', '⏳ 상품 정보 로딩...', 'DB에서 상품 정보를 가져오고 있습니다...');
+
+            const response = await fetch(`${API_BASE_URL}/api/products/${productId}`);
+
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            const product = await response.json();
+            
+            // UI 업데이트
+            document.getElementById('productName').textContent = product.name;
+            document.getElementById('productDescription').textContent = product.description || '상품 설명이 없습니다.';
+            document.getElementById('productPrice').textContent = `${product.price.toLocaleString()}원`;
+            document.getElementById('summaryPrice').textContent = `${product.price.toLocaleString()}원`;
+            document.getElementById('totalPrice').textContent = `${product.price.toLocaleString()}원`;
+            
+            // 숨겨진 필드 업데이트
+            document.getElementById('orderName').value = product.name;
+            document.getElementById('amount').value = product.price;
+            
+            showResult('success', '✅ 상품 정보 로드 완료', `상품 정보가 성공적으로 로드되었습니다.`, product);
+        } catch (error) {
+            console.error('상품 정보 로드 오류:', error);
+            showResult('error', '❌ 상품 정보 로드 실패', `오류: ${error.message}`);
+        }
+    }
+
+    // 2. 통합 결제 요청 (주문 생성 + 결제)
+    async function createOrderAndPayment() {
         const orderId = document.getElementById('orderId').value;
         const userId = document.getElementById('userId').value;
+        const productId = document.getElementById('productId').value;
+        const orderName = document.getElementById('orderName').value;
         const amount = document.getElementById('amount').value;
 
-        if (!orderId || !userId || !amount) {
+        if (!orderId || !userId || !productId || !orderName || !amount) {
             showResult('error', '❌ 입력 오류', '모든 필수 항목을 입력해주세요.');
             return;
         }
@@ -393,7 +431,7 @@
         try {
             showResult('info', '⏳ 처리 중...', '주문을 생성하고 있습니다...');
 
-            const response = await fetch(`${API_BASE_URL}/api/orders`, {
+            const response = await fetch(`${API_BASE_URL}/api/payments/request`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -402,7 +440,17 @@
                     orderId: orderId,
                     userId: parseInt(userId),
                     totalAmount: parseInt(amount),
-                    status: 'PENDING_PAYMENT'
+                    orderName: orderName,
+                    paymentMethod: 'CARD',
+                    customerName: '테스트 사용자',
+                    customerEmail: 'test@example.com',
+                    customerPhone: '010-1234-5678',
+                    orderItems: [{
+                        productId: parseInt(productId),
+                        quantity: 1,
+                        price: parseInt(amount),
+                        productName: orderName
+                    }]
                 })
             });
 
@@ -410,7 +458,7 @@
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
 
-            const data = await response.json();
+            const data = await response.text();
             showResult('success', '✅ 주문 생성 성공', `주문이 생성되었습니다. 이제 "결제하기" 버튼을 클릭하세요.`, data);
         } catch (error) {
             console.error('주문 생성 오류:', error);
@@ -536,12 +584,143 @@
         }
     }
 
-    // 페이지 로드 시 랜덤 주문 ID 생성
+    // 테스트 상품 생성
+    async function createTestProduct() {
+        try {
+            showResult('info', '⏳ 테스트 상품 생성 중...', 'DB에 테스트 상품을 생성하고 있습니다...');
+
+            const response = await fetch(`${API_BASE_URL}/api/products/test-data`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            });
+
+            const resultText = await response.text();
+
+            if (response.ok) {
+                showResult('success', '✅ 테스트 상품 생성 완료', resultText);
+                // 상품 정보 다시 로드
+                setTimeout(() => {
+                    loadProductInfo();
+                }, 1000);
+            } else {
+                showResult('error', '❌ 테스트 상품 생성 실패', resultText);
+            }
+        } catch (error) {
+            console.error('테스트 상품 생성 오류:', error);
+            showResult('error', '❌ 테스트 상품 생성 오류', `오류: ${error.message}`);
+        }
+    }
+
+    // 환불 가능한 결제 목록 조회
+    async function showPaidPayments() {
+        try {
+            showResult('info', '⏳ 조회 중...', '환불 가능한 결제 목록을 조회하고 있습니다...');
+
+            const response = await fetch(`${API_BASE_URL}/api/payments/paid`);
+
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            const payments = await response.json();
+            
+            if (payments.length === 0) {
+                showResult('info', '📋 환불 가능한 결제 없음', '현재 환불 가능한 결제가 없습니다.');
+                return;
+            }
+
+            // 환불 가능한 결제 목록을 테이블 형태로 표시
+            let html = '<h3>💳 환불 가능한 결제 목록</h3><div style="margin-top: 15px;">';
+            
+            payments.forEach(payment => {
+                html += `
+                    <div style="border: 1px solid #ddd; border-radius: 8px; padding: 15px; margin-bottom: 10px; background: #f9f9f9;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <strong>Payment ID:</strong> ${payment.paymentId}<br>
+                                <strong>Order ID:</strong> ${payment.orderId}<br>
+                                <strong>금액:</strong> ${payment.amount.toLocaleString()}원<br>
+                                <strong>결제일:</strong> ${new Date(payment.paidAt).toLocaleString()}
+                            </div>
+                            <div>
+                                <button onclick="requestRefund(${payment.paymentId}, ${payment.amount})" 
+                                        style="background: #dc3545; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer;">
+                                    환불하기
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            
+            html += '</div>';
+            
+            const resultDiv = document.getElementById('result');
+            resultDiv.className = 'result info';
+            resultDiv.style.display = 'block';
+            resultDiv.innerHTML = html;
+            
+        } catch (error) {
+            console.error('환불 가능 결제 조회 오류:', error);
+            showResult('error', '❌ 조회 실패', `오류: ${error.message}`);
+        }
+    }
+
+    // 환불 요청
+    async function requestRefund(paymentId, amount) {
+        const reason = prompt('환불 사유를 입력해주세요:', '사용자 요청에 의한 환불');
+        if (!reason) return;
+
+        const refundAmount = prompt(`환불 금액을 입력해주세요 (전체 환불: ${amount}원):`, amount);
+        if (!refundAmount) return;
+
+        try {
+            showResult('info', '⏳ 환불 처리 중...', '환불을 처리하고 있습니다...');
+
+            const response = await fetch(`${API_BASE_URL}/api/refunds/request`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    paymentId: paymentId,
+                    amount: parseFloat(refundAmount),
+                    reason: reason,
+                    customerName: '테스트 사용자',
+                    customerEmail: 'test@example.com',
+                    customerPhone: '010-1234-5678'
+                })
+            });
+
+            const resultText = await response.text();
+
+            if (response.ok) {
+                showResult('success', '✅ 환불 완료', `환불이 성공적으로 처리되었습니다.<br>${resultText}`);
+                
+                // 3초 후 환불 가능 결제 목록 다시 조회
+                setTimeout(() => {
+                    showPaidPayments();
+                }, 3000);
+            } else {
+                showResult('error', '❌ 환불 실패', resultText);
+            }
+        } catch (error) {
+            console.error('환불 요청 오류:', error);
+            showResult('error', '❌ 환불 오류', `오류: ${error.message}`);
+        }
+    }
+
+    // 페이지 로드 시 랜덤 주문 ID 생성 및 상품 정보 로드
     window.addEventListener('load', function() {
         const today = new Date();
         const dateStr = today.toISOString().split('T')[0].replace(/-/g, '');
         const randomNum = Math.floor(Math.random() * 10000).toString().padStart(5, '0');
         document.getElementById('orderId').value = `order_${dateStr}_${randomNum}`;
+        
+        // 상품 정보 로드
+        loadProductInfo();
     });
 </script>
 </body>

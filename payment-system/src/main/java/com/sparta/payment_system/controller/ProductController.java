@@ -127,4 +127,30 @@ public class ProductController {
             return ResponseEntity.internalServerError().build();
         }
     }
+    
+    // 테스트용 상품 생성 API
+    @PostMapping("/test-data")
+    public ResponseEntity<String> createTestProducts() {
+        try {
+            // 기존 상품이 있는지 확인
+            if (productRepository.existsById(1L)) {
+                return ResponseEntity.ok("테스트 상품이 이미 존재합니다.");
+            }
+            
+            // 테스트 상품 생성
+            Product testProduct = new Product();
+            testProduct.setName("스파르타 티셔츠 (화이트, M)");
+            testProduct.setPrice(java.math.BigDecimal.valueOf(1000));
+            testProduct.setStock(100);
+            testProduct.setDescription("부드러운 코튼 100% 티셔츠. 데일리로 착용하기 좋은 베이직 핏.");
+            
+            productRepository.save(testProduct);
+            
+            return ResponseEntity.ok("테스트 상품이 생성되었습니다. Product ID: 1");
+        } catch (Exception e) {
+            System.err.println("테스트 상품 생성 오류: " + e.getMessage());
+            e.printStackTrace();
+            return ResponseEntity.status(500).body("테스트 상품 생성 실패: " + e.getMessage());
+        }
+    }
 }

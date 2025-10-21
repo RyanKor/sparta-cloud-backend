@@ -143,6 +143,8 @@ public class WebhookController {
             System.out.println("Payment ID: " + paymentId);
             System.out.println("Transaction ID: " + txId);
             System.out.println("Status: " + status);
+            System.out.println("Status 비교 - 'PAID'.equals(status): " + "PAID".equals(status));
+            System.out.println("Status 비교 - 'Paid'.equals(status): " + "Paid".equals(status));
             
             // 결제 완료 상태일 때 자동 검증
             if ("PAID".equals(status) || "Paid".equals(status)) {
