@@ -37,8 +37,9 @@ public class OrderItem {
     @JsonBackReference
     private Order order;
     
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "product_id", insertable = false, updatable = false)
-    @JsonBackReference
-    private Product product;
+    // 외래키 제약조건 문제를 방지하기 위해 일시적으로 주석 처리
+    // @ManyToOne(fetch = FetchType.LAZY)
+    // @JoinColumn(name = "product_id", insertable = false, updatable = false)
+    // @JsonBackReference
+    // private Product product;
 }

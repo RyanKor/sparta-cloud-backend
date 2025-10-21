@@ -5,9 +5,11 @@ import com.sparta.payment_system.dto.PaymentRequestDto;
 import com.sparta.payment_system.entity.Order;
 import com.sparta.payment_system.entity.OrderItem;
 import com.sparta.payment_system.entity.Payment;
+import com.sparta.payment_system.entity.Product;
 import com.sparta.payment_system.repository.OrderRepository;
 import com.sparta.payment_system.repository.OrderItemRepository;
 import com.sparta.payment_system.repository.PaymentRepository;
+import com.sparta.payment_system.repository.ProductRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -16,6 +18,7 @@ import reactor.core.publisher.Mono;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/payments")
@@ -26,13 +29,15 @@ public class PaymentController {
     private final OrderRepository orderRepository;
     private final OrderItemRepository orderItemRepository;
     private final PaymentRepository paymentRepository;
+    private final ProductRepository productRepository;
     
     @Autowired
-    public PaymentController(PaymentService paymentService, OrderRepository orderRepository, OrderItemRepository orderItemRepository, PaymentRepository paymentRepository) {
+    public PaymentController(PaymentService paymentService, OrderRepository orderRepository, OrderItemRepository orderItemRepository, PaymentRepository paymentRepository, ProductRepository productRepository) {
         this.paymentService = paymentService;
         this.orderRepository = orderRepository;
         this.orderItemRepository = orderItemRepository;
         this.paymentRepository = paymentRepository;
+        this.productRepository = productRepository;
     }
     
     
@@ -117,6 +122,14 @@ public class PaymentController {
             // 2. 주문 아이템들 저장
             if (paymentRequest.getOrderItems() != null && !paymentRequest.getOrderItems().isEmpty()) {
                 for (PaymentRequestDto.OrderItemDto itemDto : paymentRequest.getOrderItems()) {
+                    // 상품 존재 여부 확인
+                    Optional<Product> productOptional = productRepository.findById(itemDto.getProductId());
+                    if (productOptional.isEmpty()) {
+                        System.err.println("상품을 찾을 수 없습니다. Product ID: " + itemDto.getProductId());
+                        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                                .body("상품을 찾을 수 없습니다. Product ID: " + itemDto.getProductId());
+                    }
+                    
                     OrderItem orderItem = new OrderItem();
                     orderItem.setOrderId(savedOrder.getOrderId());
                     orderItem.setProductId(itemDto.getProductId());

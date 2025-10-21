@@ -2,8 +2,10 @@ package com.sparta.payment_system.controller;
 
 import com.sparta.payment_system.entity.Order;
 import com.sparta.payment_system.entity.OrderItem;
+import com.sparta.payment_system.entity.Product;
 import com.sparta.payment_system.repository.OrderRepository;
 import com.sparta.payment_system.repository.OrderItemRepository;
+import com.sparta.payment_system.repository.ProductRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -18,11 +20,13 @@ public class OrderController {
     
     private final OrderRepository orderRepository;
     private final OrderItemRepository orderItemRepository;
+    private final ProductRepository productRepository;
     
     @Autowired
-    public OrderController(OrderRepository orderRepository, OrderItemRepository orderItemRepository) {
+    public OrderController(OrderRepository orderRepository, OrderItemRepository orderItemRepository, ProductRepository productRepository) {
         this.orderRepository = orderRepository;
         this.orderItemRepository = orderItemRepository;
+        this.productRepository = productRepository;
     }
     
     @PostMapping
@@ -34,6 +38,13 @@ public class OrderController {
             // 주문 아이템들 저장
             if (order.getOrderItems() != null && !order.getOrderItems().isEmpty()) {
                 for (OrderItem orderItem : order.getOrderItems()) {
+                    // 상품 존재 여부 확인
+                    Optional<Product> productOptional = productRepository.findById(orderItem.getProductId());
+                    if (productOptional.isEmpty()) {
+                        System.err.println("상품을 찾을 수 없습니다. Product ID: " + orderItem.getProductId());
+                        return ResponseEntity.badRequest().build();
+                    }
+                    
                     orderItem.setOrderId(savedOrder.getOrderId());
                     orderItemRepository.save(orderItem);
                 }
