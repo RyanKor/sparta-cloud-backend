@@ -37,16 +37,6 @@ Table OrderItems as OI {
   price decimal(10, 2) [not null, note: 'Price at the time of order']
 }
 
-Table PaymentMethods as PM {
-  method_id int [pk, increment]
-  user_id int [not null]
-  pg_billing_key varchar(255) [not null, unique, note: 'Billing key from payment gateway']
-  card_type varchar(50)
-  card_last4 varchar(4)
-  is_default boolean [default: false]
-  created_at timestamp [default: `now()`]
-}
-
 Table Payments as Pay {
   payment_id int [pk, increment]
   order_id varchar(255) [not null, unique]
@@ -69,13 +59,8 @@ Table Refunds as R {
 
 // --- Relationships ---
 Ref: U.user_id < O.user_id
-Ref: U.user_id < PM.user_id
-
 Ref: Prod.product_id < OI.product_id
 Ref: O.order_id < OI.order_id
-
 Ref: O.order_id - Pay.order_id // One-to-One
-
-Ref: PM.method_id < Pay.method_id
 Ref: Pay.payment_id < R.payment_id
 ```
