@@ -17,8 +17,8 @@ public class DatabaseTestController {
 
     @PostMapping("/user")
     public User createUser(@RequestParam String email, 
-                          @RequestParam String passwordHash, 
-                          @RequestParam(required = false) String name) {
+                           @RequestParam String passwordHash, 
+                           @RequestParam(required = false) String name) {
         User user = new User(email, passwordHash, name);
         return userRepository.save(user);
     }
@@ -39,10 +39,10 @@ public class DatabaseTestController {
     }
 
     @PutMapping("/user/{userId}")
-    public User updateUser(@PathVariable Long userId, 
-                          @RequestParam(required = false) String email,
-                          @RequestParam(required = false) String passwordHash,
-                          @RequestParam(required = false) String name) {
+    public User updateUser(@PathVariable Long userId,
+                           @RequestParam(required = false) String email,
+                           @RequestParam(required = false) String passwordHash,
+                           @RequestParam(required = false) String name) {
         Optional<User> userOpt = userRepository.findById(userId);
         if (userOpt.isPresent()) {
             User user = userOpt.get();

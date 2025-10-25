@@ -17,6 +17,7 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
     List<Payment> findByStatus(Payment.PaymentStatus status);
     
     List<Payment> findByMethodId(Long methodId);
-    
+
+    //  신규 추가 부분
     List<Payment> findByOrderIdInAndStatus(List<String> orderIds, Payment.PaymentStatus status);
 }
