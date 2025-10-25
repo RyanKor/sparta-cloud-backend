@@ -5,6 +5,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.hibernate.annotations.CreationTimestamp;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;  // 이 줄 추가
 
 import java.time.LocalDateTime;
 
@@ -46,8 +47,8 @@ public class StockAlert {
     
     @Column(name = "resolved_at")
     private LocalDateTime resolvedAt;
-    
-    // Product와의 관계 (외래키 제약조건 없이)
+
+    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "product_id", insertable = false, updatable = false)
     private Product product;
