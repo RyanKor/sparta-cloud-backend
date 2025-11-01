@@ -1,0 +1,21 @@
+version: 0.0
+os: linux
+files:
+  - source: /  # 1번에서 수정한 zip 파일의 루트 (즉, .jar 파일)
+    destination: /home/ec2-user/sparta-cloud-payment-system/payment-system # EC2 인스턴스에 파일이 복사될 위치
+
+permissions:
+  - object: /home/ec2-user/sparta-cloud-payment-system/payment-system
+    owner: ec2-user
+    group: ec2-user
+    mode: 755
+
+hooks:
+  ApplicationStop: # 새 버전을 배포하기 전, 기존 앱 중지
+    - location: scripts/stop.sh
+      timeout: 60
+      runas: root
+  ApplicationStart: # 파일 복사가 끝난 후, 새 앱 시작
+    - location: scripts/start.sh
+      timeout: 60
+      runas: root
