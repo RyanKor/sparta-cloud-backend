@@ -1,7 +1,7 @@
 version: 0.0
 os: linux
 files:
-  - source: / # buildspec에서 base-directory 기준으로 .jar 파일만 zip파일 루트에 담깁니다.
+  - source: /
     destination: /home/ec2-user/sparta-cloud-payment-system/payment-system/build/libs
 
 permissions:
