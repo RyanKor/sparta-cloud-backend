@@ -12,7 +12,7 @@ files:
 
 # 2. 파일 권한 설정
 permissions:
-  - object: /home/ec2-user/app/
+  - object: /home/ec2-user/app
     pattern: "**"
     mode: 755
     owner: ec2-user
