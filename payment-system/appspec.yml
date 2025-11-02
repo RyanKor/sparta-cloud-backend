@@ -9,6 +9,7 @@ files:
     overwrite: yes # 덮어쓰기 허용 (혹시 모르니 유지)
 
 # 2. 파일 권한 설정
+# 권한 설정을 안하면, 에러 발생해요.
 permissions:
   - object: /home/ec2-user/app
     pattern: "*.sh"
