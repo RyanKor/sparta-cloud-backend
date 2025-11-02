@@ -23,21 +23,21 @@ permissions:
 hooks:
   # (1) 새 배포 전, systemd 서비스를 중지
   ApplicationStop:
-    - location: scripts/stop_server.sh
+    - location: stop_server.sh
       timeout: 300
       runas: ec2-user
   # (2) 파일 복사 후, 새 .jar 파일을 서비스 경로로 이동/교체
   AfterInstall:
-    - location: scripts/after_install.sh
+    - location: after_install.sh
       timeout: 300
       runas: ec2-user
   # (3) systemd 서비스를 시작
   ApplicationStart:
-    - location: scripts/start_server.sh
+    - location: start_server.sh
       timeout: 300
       runas: ec2-user
   # (4) systemd 서비스가 정상적으로 시작되었는지 확인
   ValidateService:
-    - location: scripts/validate_service.sh
+    - location: validate_service.sh
       timeout: 60
       runas: ec2-user
