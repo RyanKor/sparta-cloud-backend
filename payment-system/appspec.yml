@@ -3,24 +3,33 @@ version: 0.0
 os: linux
 
 # 1. 파일 복사
-# buildspec.yml의 아티팩트(*.jar, appspec.yml, scripts/*)를
-# EC2 인스턴스의 임시 스테이징 디렉터리로 복사합니다.
 files:
   - source: /
     destination: /home/ec2-user/app
-    overwrite: yes
+    overwrite: yes # 덮어쓰기 허용 (혹시 모르니 유지)
 
 # 2. 파일 권한 설정
 permissions:
   - object: /home/ec2-user/app
-    pattern: "**"
+    pattern: "*.sh"
     mode: 755
+    owner: ec2-user
+    group: ec2-user
+  - object: /home/ec2-user/app
+    pattern: "*.jar"
+    mode: 644
     owner: ec2-user
     group: ec2-user
 
 # 3. CodeDeploy 배포 라이프사이클 훅(Hooks)
-# 이제 이 스크립트들은 systemd 서비스를 제어합니다.
 hooks:
+  # (0) [신규 추가] Install 단계(파일 복사) 전에
+  #     이전 배포 파일이 남아있는 스테이징 디렉터리를 정리합니다.
+  BeforeInstall:
+    - location: before_install.sh # 이 스크립트를 추가합니다.
+      timeout: 300
+      runas: root # root 권한으로 디렉터리 정리
+  
   # (1) 새 배포 전, systemd 서비스를 중지
   ApplicationStop:
     - location: stop_server.sh
