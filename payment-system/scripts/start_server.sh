@@ -1,4 +1,4 @@
-#!/binG/bash
+#!/bin/bash
 echo "Starting payment-system.service via systemctl..."
 
 # (중요) 요청하신 대로 환경 변수 섹션이 모두 제거되었습니다.
