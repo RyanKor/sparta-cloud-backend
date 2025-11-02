@@ -1,34 +1,43 @@
+# CodeDeploy AppSpec 파일
 version: 0.0
 os: linux
+
+# 1. 파일 복사
+# buildspec.yml의 아티팩트(*.jar, appspec.yml, scripts/*)를
+# EC2 인스턴스의 임시 스테이징 디렉터리로 복사합니다.
 files:
   - source: /
-    destination: /home/ec2-user/sparta-cloud-payment-system/payment-system/build/libs
+    destination: /home/ec2-user/app
+    overwrite: yes
 
+# 2. 파일 권한 설정
 permissions:
-  - object: /home/ec2-user/sparta-cloud-payment-system/payment-system
+  - object: /home/ec2-user/app/scripts/
+    pattern: "**"
+    mode: 755
     owner: ec2-user
     group: ec2-user
-    mode: 755
-  # 스크립트 실행 권한 추가
-  - object: /home/ec2-user/sparta-cloud-payment-system/payment-system/scripts
-    owner: ec2-user
-    group: ec2-user
-    mode: 755
-    type:
-      - directory
-  - object: /home/ec2-user/sparta-cloud-payment-system/payment-system/scripts/
-    owner: ec2-user
-    group: ec2-user
-    mode: 755
-    type:
-      - file
 
+# 3. CodeDeploy 배포 라이프사이클 훅(Hooks)
+# 이제 이 스크립트들은 systemd 서비스를 제어합니다.
 hooks:
-  ApplicationStop: # 새 버전을 배포하기 전, 기존 앱 중지
-    - location: scripts/stop.sh # appspec.yml 기준 상대 경로입니다.
-      timeout: 60
-      runas: ec2-user # root 대신 ec2-user로 실행하는 것이 더 안전합니다.
-  ApplicationStart: # 파일 복사가 끝난 후, 새 앱 시작
-    - location: scripts/start.sh
+  # (1) 새 배포 전, systemd 서비스를 중지
+  ApplicationStop:
+    - location: scripts/stop_server.sh
+      timeout: 300
+      runas: ec2-user
+  # (2) 파일 복사 후, 새 .jar 파일을 서비스 경로로 이동/교체
+  AfterInstall:
+    - location: scripts/after_install.sh
+      timeout: 300
+      runas: ec2-user
+  # (3) systemd 서비스를 시작
+  ApplicationStart:
+    - location: scripts/start_server.sh
+      timeout: 300
+      runas: ec2-user
+  # (4) systemd 서비스가 정상적으로 시작되었는지 확인
+  ValidateService:
+    - location: scripts/validate_service.sh
       timeout: 60
       runas: ec2-user
