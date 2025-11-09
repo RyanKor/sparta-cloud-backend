@@ -6,7 +6,7 @@ plugins {
 
 group = 'com.sparta'
 version = '0.0.1-SNAPSHOT'
-description = 'Sparta point Payment System'
+description = 'Sparta Subscription Payment System'
 
 java {
 	toolchain {
