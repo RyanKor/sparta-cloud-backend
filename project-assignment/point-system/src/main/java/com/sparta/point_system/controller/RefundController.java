@@ -6,6 +6,7 @@ import com.sparta.point_system.entity.Order;
 import com.sparta.point_system.repository.RefundRepository;
 import com.sparta.point_system.repository.PaymentRepository;
 import com.sparta.point_system.repository.OrderRepository;
+import com.sparta.point_system.service.MembershipService;
 import com.sparta.point_system.service.PaymentService;
 import com.sparta.point_system.service.PointService;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -39,6 +40,9 @@ public class RefundController {
     
     @Autowired
     private PointService pointService;
+    
+    @Autowired
+    private MembershipService membershipService;
 
     @PostMapping("/refund")
     public Refund createRefund(@RequestParam Long paymentId,
@@ -244,6 +248,15 @@ public class RefundController {
                         order.setStatus(Order.OrderStatus.CANCELLED);
                         orderRepository.save(order);
                         System.out.println("주문 상태가 CANCELLED로 변경되었습니다. Order ID: " + orderId);
+                        
+                        // 4. 멤버십 등급 자동 업데이트 (총 결제 금액이 줄어들었으므로 재계산)
+                        try {
+                            membershipService.updateMembershipLevel(userId);
+                            System.out.println("멤버십 등급이 자동 업데이트되었습니다. User ID: " + userId);
+                        } catch (Exception e) {
+                            System.err.println("멤버십 등급 업데이트 중 오류 발생: " + e.getMessage());
+                            e.printStackTrace();
+                        }
                     } else {
                         System.err.println("[경고] 주문 정보를 찾을 수 없습니다. Order ID: " + orderId);
                     }
@@ -278,6 +291,21 @@ public class RefundController {
                     .map(isSuccess -> {
                         Map<String, Object> response = new HashMap<>();
                         if (isSuccess) {
+                            // 멤버십 등급 자동 업데이트 (PaymentService.updateDatabaseAfterCancel에서 이미 처리됨)
+                            // 하지만 추가로 확인하기 위해 주문 정보를 조회하여 업데이트
+                            try {
+                                String orderId = payment.getOrderId();
+                                Optional<Order> orderOptional = orderRepository.findByOrderId(orderId);
+                                if (orderOptional.isPresent()) {
+                                    Long userId = orderOptional.get().getUserId();
+                                    membershipService.updateMembershipLevel(userId);
+                                    System.out.println("환불 후 멤버십 등급이 자동 업데이트되었습니다. User ID: " + userId);
+                                }
+                            } catch (Exception e) {
+                                System.err.println("환불 후 멤버십 등급 업데이트 중 오류 발생: " + e.getMessage());
+                                e.printStackTrace();
+                            }
+                            
                             response.put("message", "환불이 성공적으로 처리되었습니다. 사용한 포인트도 복구되었습니다.");
                             response.put("paymentId", finalPaymentId);
                             response.put("refundAmount", finalRefundAmount);

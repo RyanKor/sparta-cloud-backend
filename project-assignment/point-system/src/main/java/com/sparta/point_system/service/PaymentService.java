@@ -27,17 +27,20 @@ public class PaymentService {
     private final RefundRepository refundRepository;
     private final OrderRepository orderRepository;
     private final PointService pointService;
+    private final MembershipService membershipService;
     private final ObjectMapper objectMapper;
 
     @Autowired
     public PaymentService(PortOneClient portoneClient, PaymentRepository paymentRepository, 
                          RefundRepository refundRepository, OrderRepository orderRepository,
-                         PointService pointService, ObjectMapper objectMapper) {
+                         PointService pointService, MembershipService membershipService,
+                         ObjectMapper objectMapper) {
         this.portoneClient = portoneClient;
         this.paymentRepository = paymentRepository;
         this.refundRepository = refundRepository;
         this.orderRepository = orderRepository;
         this.pointService = pointService;
+        this.membershipService = membershipService;
         this.objectMapper = objectMapper;
     }
 
@@ -252,17 +255,26 @@ public class PaymentService {
             orderRepository.save(order);
             System.out.println("주문 상태가 COMPLETED로 업데이트되었습니다. Order ID: " + orderId);
             
-            // 포인트 적립 처리 (주문 금액의 일정 비율)
+            // 포인트 적립 처리 (멤버십 등급에 따른 차등 적립)
             Long userId = order.getUserId();
-            Integer pointsEarned = calculatePointsEarned(order.getTotalAmount().intValue(), userId);
+            Integer pointsEarned = membershipService.calculateEarnedPoints(userId, order.getTotalAmount());
             if (pointsEarned > 0) {
                 pointService.earnPoints(
                     userId,
                     pointsEarned,
                     orderId,
-                    "주문 완료로 인한 포인트 적립",
+                    "주문 완료로 인한 포인트 적립 (멤버십 등급 반영)",
                     LocalDateTime.now().plusYears(1) // 1년 후 만료
                 );
+            }
+            
+            // 멤버십 등급 자동 업데이트 (총 결제 금액 기준)
+            try {
+                membershipService.updateMembershipLevel(userId);
+                System.out.println("멤버십 등급이 자동 업데이트되었습니다. User ID: " + userId);
+            } catch (Exception e) {
+                System.err.println("멤버십 등급 업데이트 중 오류 발생: " + e.getMessage());
+                e.printStackTrace();
             }
             
         } catch (Exception e) {
@@ -317,14 +329,6 @@ public class PaymentService {
         }
     }
 
-    /**
-     * 포인트 적립 금액 계산 (멤버십 등급에 따라 다를 수 있음)
-     * 현재는 주문 금액의 1%로 고정
-     */
-    private Integer calculatePointsEarned(Integer orderAmount, Long userId) {
-        // TODO: 멤버십 등급에 따른 적립률 적용
-        return (int) (orderAmount * 0.01);
-    }
 
     public Mono<Boolean> cancelPayment(String paymentId, String reason) {
         return portoneClient.getAccessToken()
@@ -460,13 +464,13 @@ public class PaymentService {
             e.printStackTrace();
         }
         
-        // 주문 정보가 있는 경우에만 추가 처리
+            // 주문 정보가 있는 경우에만 추가 처리
         if (orderOptional.isPresent()) {
             Order order = orderOptional.get();
             userId = order.getUserId();
 
-            // 2. 적립된 포인트 취소 (주문 금액의 1% 계산)
-            Integer pointsEarned = calculatePointsEarned(order.getTotalAmount().intValue(), userId);
+            // 2. 적립된 포인트 취소 (멤버십 등급에 따른 적립률 적용)
+            Integer pointsEarned = membershipService.calculateEarnedPoints(userId, order.getTotalAmount());
             if (pointsEarned > 0) {
                 try {
                     // 해당 주문으로 적립된 포인트 거래 내역 찾기
@@ -500,6 +504,15 @@ public class PaymentService {
             order.setStatus(Order.OrderStatus.CANCELLED);
             orderRepository.save(order);
             System.out.println("주문 상태가 CANCELLED로 변경되었습니다. Order ID: " + orderId);
+            
+            // 4. 멤버십 등급 자동 업데이트 (총 결제 금액이 줄어들었으므로 재계산)
+            try {
+                membershipService.updateMembershipLevel(userId);
+                System.out.println("멤버십 등급이 자동 업데이트되었습니다. User ID: " + userId);
+            } catch (Exception e) {
+                System.err.println("멤버십 등급 업데이트 중 오류 발생: " + e.getMessage());
+                e.printStackTrace();
+            }
         }
 
         BigDecimal refundAmount = extractRefundAmount(cancelResult);

@@ -46,6 +46,9 @@ public class PaymentController {
     
     @Autowired
     private ProductRepository productRepository;
+    
+    @Autowired
+    private com.sparta.point_system.service.MembershipService membershipService;
 
     @PostMapping("/payment")
     public Payment createPayment(@RequestParam String orderId,
@@ -186,6 +189,78 @@ public class PaymentController {
             e.printStackTrace();
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body("Payment request processing failed: " + e.getMessage());
+        }
+    }
+    
+    // 포인트 전액 결제 완료 처리 API
+    @PostMapping("/complete-point-payment")
+    public ResponseEntity<Map<String, Object>> completePointPayment(@RequestBody Map<String, String> request) {
+        try {
+            String orderId = request.get("orderId");
+            if (orderId == null || orderId.isEmpty()) {
+                Map<String, Object> error = new HashMap<>();
+                error.put("error", "orderId는 필수입니다.");
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+            }
+            
+            Optional<Order> orderOptional = orderRepository.findByOrderId(orderId);
+            if (orderOptional.isEmpty()) {
+                Map<String, Object> error = new HashMap<>();
+                error.put("error", "주문을 찾을 수 없습니다. Order ID: " + orderId);
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+            }
+            
+            Order order = orderOptional.get();
+            
+            // 주문 상태를 COMPLETED로 변경
+            order.setStatus(Order.OrderStatus.COMPLETED);
+            orderRepository.save(order);
+            
+            // Payment 레코드 생성 (포인트 전액 결제)
+            Payment payment = new Payment();
+            payment.setOrderId(orderId);
+            payment.setAmount(order.getTotalAmount());
+            payment.setStatus(Payment.PaymentStatus.PAID);
+            payment.setPaymentMethod("POINT");
+            payment.setPaidAt(java.time.LocalDateTime.now());
+            paymentRepository.save(payment);
+            
+            // 포인트 적립 처리 (멤버십 등급에 따른 차등 적립)
+            Long userId = order.getUserId();
+            Integer pointsEarned = membershipService.calculateEarnedPoints(userId, order.getTotalAmount());
+            if (pointsEarned > 0) {
+                pointService.earnPoints(
+                    userId,
+                    pointsEarned,
+                    orderId,
+                    "포인트 전액 결제 완료로 인한 포인트 적립 (멤버십 등급 반영)",
+                    java.time.LocalDateTime.now().plusYears(1)
+                );
+            }
+            
+            // 멤버십 등급 자동 업데이트
+            try {
+                membershipService.updateMembershipLevel(userId);
+                System.out.println("멤버십 등급이 자동 업데이트되었습니다. User ID: " + userId);
+            } catch (Exception e) {
+                System.err.println("멤버십 등급 업데이트 중 오류 발생: " + e.getMessage());
+                e.printStackTrace();
+            }
+            
+            Map<String, Object> response = new HashMap<>();
+            response.put("message", "포인트 전액 결제가 완료되었습니다.");
+            response.put("orderId", orderId);
+            response.put("pointsEarned", pointsEarned);
+            response.put("paymentId", payment.getPaymentId());
+            
+            return ResponseEntity.ok(response);
+            
+        } catch (Exception e) {
+            System.err.println("포인트 전액 결제 완료 처리 중 오류 발생: " + e.getMessage());
+            e.printStackTrace();
+            Map<String, Object> error = new HashMap<>();
+            error.put("error", "포인트 전액 결제 완료 처리 중 오류: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
         }
     }
     

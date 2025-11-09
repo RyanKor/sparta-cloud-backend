@@ -71,6 +71,68 @@
             opacity: 0.8;
         }
 
+        .membership-badge {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 700;
+            margin-top: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .membership-normal {
+            background: rgba(255, 255, 255, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+        }
+
+        .membership-vip {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            border: 1px solid rgba(255, 255, 255, 0.8);
+        }
+
+        .membership-vvip {
+            background: linear-gradient(135deg, #ffd700 0%, #ff8c00 100%);
+            border: 1px solid rgba(255, 255, 255, 0.9);
+            color: #333;
+        }
+
+        .payment-history {
+            margin-top: 24px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 12px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .payment-history h3 {
+            margin-bottom: 16px;
+            color: #333;
+            font-size: 18px;
+        }
+
+        .payment-item {
+            background: white;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .payment-item-info {
+            flex: 1;
+        }
+
+        .payment-item-amount {
+            font-weight: 700;
+            color: #667eea;
+        }
+
         .point-charge-btn {
             margin-top: 12px;
             padding: 10px 20px;
@@ -369,6 +431,12 @@
         <div class="point-balance">
             <span id="pointBalance">0</span><small> P</small>
         </div>
+        <div id="membershipBadge" class="membership-badge membership-normal">
+            <span id="membershipLevel">Normal</span>
+        </div>
+        <div style="margin-top: 8px; font-size: 12px; opacity: 0.9;">
+            총 결제 금액: <span id="totalPaymentAmount">0</span>원
+        </div>
         <button class="point-charge-btn" onclick="chargePoints()">💰 100,000 포인트 충전</button>
     </div>
 
@@ -430,8 +498,15 @@
         <div class="actions">
             <button type="button" class="btn-primary" id="payButton" onclick="processPayment()">포인트 결제하기</button>
             <button type="button" class="btn-secondary" onclick="checkOrder()">주문 조회</button>
+            <button type="button" class="btn-secondary" onclick="loadPaymentHistory()">결제 내역 조회</button>
             <button type="button" class="btn-secondary" onclick="createTestProduct()">테스트 상품 생성</button>
             <button type="button" class="btn-secondary" onclick="loadPointBalance()">포인트 잔액 새로고침</button>
+        </div>
+        
+        <!-- 결제 내역 섹션 -->
+        <div id="paymentHistorySection" class="payment-history" style="display: none;">
+            <h3>결제 내역</h3>
+            <div id="paymentHistoryContent"></div>
         </div>
     </form>
 
@@ -440,12 +515,13 @@
 
 <script>
     const API_BASE_URL = '';
-    const STORE_ID = '';
-    const CHANNEL_KEY = '';
+    const STORE_ID = 'store-18cc2578-590f-4da9-be72-0aeac4a12638';
+    const CHANNEL_KEY = 'channel-key-f629850f-544f-4cf9-ad22-1b561acf42d0';
     const USER_ID = 1;
 
     let currentProduct = null;
     let pointBalance = 0;
+    let membershipInfo = null;
 
     // 결과 표시 함수
     function showResult(type, title, message, data = null) {
@@ -481,9 +557,118 @@
             pointsInput.max = pointBalance;
             
             updateSummary();
+            
+            // 멤버십 정보도 함께 로드
+            await loadMembershipInfo();
         } catch (error) {
             console.error('포인트 잔액 조회 오류:', error);
             showResult('error', '❌ 포인트 잔액 조회 실패', `오류: ${error.message}`);
+        }
+    }
+
+    // 멤버십 정보 조회
+    async function loadMembershipInfo() {
+        try {
+            const response = await fetch(`${API_BASE_URL}/api/membership/user/${USER_ID}/info`);
+            if (!response.ok) {
+                // API 호출 실패 시 기본값 표시
+                console.warn('멤버십 정보 조회 실패, 기본값 사용:', response.status);
+                displayMembershipInfo('Normal', 0);
+                return;
+            }
+
+            const data = await response.json();
+            membershipInfo = data;
+            
+            // 멤버십 등급 표시
+            const levelName = data.level?.name || 'Normal';
+            const totalPaymentAmount = data.totalPaymentAmount || 0;
+            
+            displayMembershipInfo(levelName, totalPaymentAmount);
+        } catch (error) {
+            console.error('멤버십 정보 조회 오류:', error);
+            // 에러 발생 시에도 기본값 표시
+            displayMembershipInfo('Normal', 0);
+        }
+    }
+    
+    // 멤버십 정보 표시 함수
+    function displayMembershipInfo(levelName, totalPaymentAmount) {
+        document.getElementById('membershipLevel').textContent = levelName;
+        document.getElementById('totalPaymentAmount').textContent = Math.floor(totalPaymentAmount).toLocaleString();
+        
+        // 멤버십 배지 스타일 적용
+        const badge = document.getElementById('membershipBadge');
+        badge.className = 'membership-badge';
+        badge.style.display = 'inline-block';
+        
+        // 기존 클래스 제거
+        badge.classList.remove('membership-normal', 'membership-vip', 'membership-vvip');
+        
+        // 등급에 따른 스타일 적용
+        if (levelName === 'Normal') {
+            badge.classList.add('membership-normal');
+        } else if (levelName === 'VIP') {
+            badge.classList.add('membership-vip');
+        } else if (levelName === 'VVIP') {
+            badge.classList.add('membership-vvip');
+        } else {
+            badge.classList.add('membership-normal');
+        }
+    }
+
+    // 결제 내역 조회
+    async function loadPaymentHistory() {
+        try {
+            showResult('info', '⏳ 조회 중...', '결제 내역을 조회하고 있습니다...');
+
+            const response = await fetch(`${API_BASE_URL}/api/membership/user/${USER_ID}/payments`);
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            const data = await response.json();
+            const completedOrders = data.completedOrders || [];
+            const paidPayments = data.paidPayments || [];
+            const cancelledOrders = data.cancelledOrders || [];
+            const totalPaidAmount = data.totalPaidAmount || 0;
+
+            // 결제 내역 HTML 생성
+            let historyHTML = '';
+            
+            if (completedOrders.length === 0) {
+                historyHTML = '<p style="text-align: center; color: #666;">결제 내역이 없습니다.</p>';
+            } else {
+                historyHTML += `<div style="margin-bottom: 16px; padding: 12px; background: white; border-radius: 8px;">`;
+                historyHTML += `<strong>총 결제 금액: ${Math.floor(totalPaidAmount).toLocaleString()}원</strong><br>`;
+                historyHTML += `<small style="color: #666;">완료 주문: ${completedOrders.length}건 | 취소 주문: ${cancelledOrders.length}건</small>`;
+                historyHTML += `</div>`;
+                
+                completedOrders.forEach((order, index) => {
+                    const payment = paidPayments.find(p => p.orderId === order.orderId);
+                    const paymentAmount = payment ? payment.amount : order.totalAmount;
+                    
+                    historyHTML += `<div class="payment-item">`;
+                    historyHTML += `<div class="payment-item-info">`;
+                    historyHTML += `<div><strong>주문 #${order.orderId}</strong></div>`;
+                    historyHTML += `<div style="font-size: 12px; color: #666; margin-top: 4px;">`;
+                    historyHTML += `${new Date(order.orderedAt).toLocaleString('ko-KR')} | `;
+                    historyHTML += `포인트 사용: ${order.pointsUsed || 0}P`;
+                    historyHTML += `</div>`;
+                    historyHTML += `</div>`;
+                    historyHTML += `<div class="payment-item-amount">${Math.floor(paymentAmount).toLocaleString()}원</div>`;
+                    historyHTML += `</div>`;
+                });
+            }
+
+            document.getElementById('paymentHistoryContent').innerHTML = historyHTML;
+            document.getElementById('paymentHistorySection').style.display = 'block';
+            
+            showResult('success', '✅ 결제 내역 조회 완료', 
+                `총 ${completedOrders.length}건의 결제 내역을 조회했습니다.`, data);
+        } catch (error) {
+            console.error('결제 내역 조회 오류:', error);
+            showResult('error', '❌ 결제 내역 조회 실패', `오류: ${error.message}`);
         }
     }
 
@@ -669,10 +854,34 @@
 
             // 2. 최종 결제 금액이 0원이면 포인트로 전액 결제 완료
             if (finalAmount <= 0) {
-                showResult('success', '✅ 포인트 결제 완료!', `포인트로 전액 결제가 완료되었습니다!`);
-                payButton.disabled = false;
-                payButton.textContent = '포인트 결제하기';
-                loadPointBalance(); // 포인트 잔액 새로고침
+                // 포인트 전액 결제 완료 처리 API 호출
+                const completeResponse = await fetch(`${API_BASE_URL}/api/payments/complete-point-payment`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        orderId: orderId
+                    })
+                });
+                
+                if (completeResponse.ok) {
+                    const completeData = await completeResponse.json();
+                    showResult('success', '✅ 포인트 결제 완료!', 
+                        `포인트로 전액 결제가 완료되었습니다!<br>적립 포인트: ${completeData.pointsEarned || 0}P`);
+                    payButton.disabled = false;
+                    payButton.textContent = '포인트 결제하기';
+                    loadPointBalance(); // 포인트 잔액 및 멤버십 정보 새로고침
+                    
+                    setTimeout(() => {
+                        loadPaymentHistory(); // 결제 내역도 새로고침
+                    }, 1000);
+                } else {
+                    const errorText = await completeResponse.text();
+                    showResult('error', '❌ 포인트 결제 완료 처리 실패', errorText);
+                    payButton.disabled = false;
+                    payButton.textContent = '포인트 결제하기';
+                }
                 return;
             }
 
@@ -745,10 +954,11 @@
 
             if (response.ok) {
                 showResult('success', '✅ 결제 완료!', `결제가 성공적으로 완료되었습니다!<br>Payment ID: ${paymentId}`);
-                loadPointBalance(); // 포인트 잔액 새로고침
+                loadPointBalance(); // 포인트 잔액 및 멤버십 정보 새로고침
                 
                 setTimeout(() => {
                     checkOrder();
+                    loadPaymentHistory(); // 결제 내역도 새로고침
                 }, 3000);
             } else {
                 showResult('error', '❌ 검증 실패', `결제는 완료되었으나 검증에 실패했습니다.<br>응답: ${resultText}`);
@@ -826,7 +1036,7 @@
         const randomNum = Math.floor(Math.random() * 10000).toString().padStart(5, '0');
         document.getElementById('orderId').value = `order_${dateStr}_${randomNum}`;
         
-        // 포인트 잔액 및 상품 정보 로드
+        // 포인트 잔액, 멤버십 정보 및 상품 정보 로드
         loadPointBalance();
         loadProductInfo();
     });
