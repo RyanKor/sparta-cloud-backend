@@ -11,6 +11,7 @@ import com.sparta.point_system.repository.PaymentRepository;
 import com.sparta.point_system.repository.ProductRepository;
 import com.sparta.point_system.service.PaymentService;
 import com.sparta.point_system.service.PointService;
+import com.sparta.point_system.util.SecurityUtil;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -49,6 +50,9 @@ public class PaymentController {
     
     @Autowired
     private com.sparta.point_system.service.MembershipService membershipService;
+    
+    @Autowired
+    private SecurityUtil securityUtil;
 
     @PostMapping("/payment")
     public Payment createPayment(@RequestParam String orderId,
@@ -133,11 +137,24 @@ public class PaymentController {
     @PostMapping("/request")
     public ResponseEntity<String> requestPayment(@RequestBody PaymentRequestDto paymentRequest) {
         try {
+            // 인증된 사용자 ID 가져오기
+            Long currentUserId = securityUtil.getCurrentUserId();
+            if (currentUserId == null) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                        .body("인증이 필요합니다.");
+            }
+            
+            // 요청된 userId가 있으면 현재 사용자와 일치하는지 확인
+            if (paymentRequest.getUserId() != null && !paymentRequest.getUserId().equals(currentUserId)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body("다른 사용자의 결제를 요청할 수 없습니다.");
+            }
+            
             // 1. 포인트 사용 처리
             if (paymentRequest.getPointsUsed() != null && paymentRequest.getPointsUsed() > 0) {
                 try {
                     pointService.usePoints(
-                        paymentRequest.getUserId(),
+                        currentUserId,
                         paymentRequest.getPointsUsed(),
                         paymentRequest.getOrderId(),
                         "주문 결제 시 포인트 사용"
@@ -151,7 +168,7 @@ public class PaymentController {
             // 2. 주문 생성
             Order order = new Order();
             order.setOrderId(paymentRequest.getOrderId());
-            order.setUserId(paymentRequest.getUserId());
+            order.setUserId(currentUserId);
             order.setTotalAmount(paymentRequest.getTotalAmount());
             order.setPointsUsed(paymentRequest.getPointsUsed() != null ? paymentRequest.getPointsUsed() : 0);
             order.setPointsDiscountAmount(paymentRequest.getPointsDiscountAmount() != null ? 
@@ -196,6 +213,14 @@ public class PaymentController {
     @PostMapping("/complete-point-payment")
     public ResponseEntity<Map<String, Object>> completePointPayment(@RequestBody Map<String, String> request) {
         try {
+            // 인증된 사용자 ID 가져오기
+            Long currentUserId = securityUtil.getCurrentUserId();
+            if (currentUserId == null) {
+                Map<String, Object> error = new HashMap<>();
+                error.put("error", "인증이 필요합니다.");
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error);
+            }
+            
             String orderId = request.get("orderId");
             if (orderId == null || orderId.isEmpty()) {
                 Map<String, Object> error = new HashMap<>();
@@ -211,6 +236,13 @@ public class PaymentController {
             }
             
             Order order = orderOptional.get();
+            
+            // 주문 소유자 확인
+            if (!order.getUserId().equals(currentUserId)) {
+                Map<String, Object> error = new HashMap<>();
+                error.put("error", "다른 사용자의 주문을 처리할 수 없습니다.");
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error);
+            }
             
             // 주문 상태를 COMPLETED로 변경
             order.setStatus(Order.OrderStatus.COMPLETED);
@@ -264,11 +296,27 @@ public class PaymentController {
         }
     }
     
-    // PAID 상태의 결제 목록 조회 (환불 가능한 결제들)
+    // PAID 상태의 결제 목록 조회 (환불 가능한 결제들) - 현재 사용자의 결제만 조회
     @GetMapping("/paid")
     public ResponseEntity<List<Payment>> getPaidPayments() {
         try {
-            List<Payment> paidPayments = paymentRepository.findByStatus(Payment.PaymentStatus.PAID);
+            // 인증된 사용자 ID 가져오기
+            Long currentUserId = securityUtil.getCurrentUserId();
+            if (currentUserId == null) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+            }
+            
+            // 현재 사용자의 주문에 대한 결제만 조회
+            List<Order> userOrders = orderRepository.findByUserId(currentUserId);
+            List<String> userOrderIds = userOrders.stream()
+                    .map(Order::getOrderId)
+                    .toList();
+            
+            List<Payment> paidPayments = paymentRepository.findByStatus(Payment.PaymentStatus.PAID)
+                    .stream()
+                    .filter(payment -> userOrderIds.contains(payment.getOrderId()))
+                    .toList();
+            
             return ResponseEntity.ok(paidPayments);
         } catch (Exception e) {
             System.err.println("PAID 결제 목록 조회 오류: " + e.getMessage());
@@ -279,62 +327,96 @@ public class PaymentController {
     
     // 결제 취소 API (PortOne imp_uid 사용, 포인트 환불 포함)
     @PostMapping("/cancel")
-    public Mono<ResponseEntity<Map<String, Object>>> cancelPayment(@RequestBody Map<String, String> request) {
-        String paymentId = request.get("paymentId"); // PortOne의 imp_uid (문자열)
-        String reason = request.getOrDefault("reason", "고객 요청에 의한 취소");
-        
-        System.out.println("결제 취소 요청 받음 - Payment ID (imp_uid): " + paymentId);
-        
-        if (paymentId == null || paymentId.isEmpty()) {
-            Map<String, Object> error = new HashMap<>();
-            error.put("error", "paymentId는 필수입니다.");
-            return Mono.just(ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error));
-        }
-        
-        // DB에서 Payment 조회 (imp_uid로)
-        Optional<Payment> paymentOptional = paymentRepository.findByImpUid(paymentId);
-        if (paymentOptional.isEmpty()) {
-            // imp_uid로 찾지 못하면 orderId로 시도 (결제 ID가 orderId와 같은 경우)
-            Optional<Payment> paymentByOrderId = paymentRepository.findByOrderId(paymentId);
-            if (paymentByOrderId.isPresent()) {
-                paymentOptional = paymentByOrderId;
+    public ResponseEntity<Map<String, Object>> cancelPayment(@RequestBody Map<String, String> request) {
+        try {
+            // 인증된 사용자 ID 가져오기
+            Long currentUserId = securityUtil.getCurrentUserId();
+            System.out.println("결제 취소 요청 - 현재 사용자 ID: " + currentUserId);
+            
+            if (currentUserId == null) {
+                Map<String, Object> error = new HashMap<>();
+                error.put("error", "인증이 필요합니다.");
+                System.out.println("결제 취소 실패: 인증되지 않은 사용자");
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error);
             }
-        }
-        
-        if (paymentOptional.isEmpty()) {
+            
+            String paymentId = request.get("paymentId"); // PortOne의 imp_uid (문자열)
+            String reason = request.getOrDefault("reason", "고객 요청에 의한 취소");
+            
+            System.out.println("결제 취소 요청 받음 - Payment ID (imp_uid): " + paymentId);
+            System.out.println("결제 취소 요청 받음 - User ID: " + currentUserId);
+            
+            if (paymentId == null || paymentId.isEmpty()) {
+                Map<String, Object> error = new HashMap<>();
+                error.put("error", "paymentId는 필수입니다.");
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+            }
+            
+            // DB에서 Payment 조회 (imp_uid로)
+            Optional<Payment> paymentOptional = paymentRepository.findByImpUid(paymentId);
+            if (paymentOptional.isEmpty()) {
+                // imp_uid로 찾지 못하면 orderId로 시도 (결제 ID가 orderId와 같은 경우)
+                Optional<Payment> paymentByOrderId = paymentRepository.findByOrderId(paymentId);
+                if (paymentByOrderId.isPresent()) {
+                    paymentOptional = paymentByOrderId;
+                }
+            }
+            
+            if (paymentOptional.isEmpty()) {
+                Map<String, Object> error = new HashMap<>();
+                error.put("error", "결제 정보를 찾을 수 없습니다. Payment ID: " + paymentId);
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+            }
+            
+            Payment payment = paymentOptional.get();
+            
+            // 주문 소유자 확인
+            Optional<Order> orderOptional = orderRepository.findByOrderId(payment.getOrderId());
+            if (orderOptional.isPresent()) {
+                Order order = orderOptional.get();
+                if (!order.getUserId().equals(currentUserId)) {
+                    Map<String, Object> error = new HashMap<>();
+                    error.put("error", "다른 사용자의 결제를 취소할 수 없습니다.");
+                    return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error);
+                }
+            } else {
+                // 주문을 찾을 수 없는 경우에도 결제 정보가 있으면 진행
+                // (주문이 삭제되었거나 없는 경우를 대비)
+                System.out.println("경고: 주문 정보를 찾을 수 없습니다. Order ID: " + payment.getOrderId() + ", 하지만 결제 취소는 진행합니다.");
+            }
+            
+            // 환불 가능 상태 확인
+            if (payment.getStatus() != Payment.PaymentStatus.PAID && 
+                payment.getStatus() != Payment.PaymentStatus.PARTIALLY_REFUNDED) {
+                Map<String, Object> error = new HashMap<>();
+                error.put("error", "환불할 수 없는 결제 상태입니다. 현재 상태: " + payment.getStatus());
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+            }
+            
+            // PortOne API로 환불 요청 (포인트 환불 로직은 PaymentService.cancelPayment 내부에서 처리됨)
+            Boolean isSuccess = paymentService.cancelPayment(paymentId, reason).block();
+            
+            Map<String, Object> response = new HashMap<>();
+            if (isSuccess != null && isSuccess) {
+                response.put("message", "결제 취소가 성공적으로 처리되었습니다. 사용한 포인트도 복구되었습니다.");
+                response.put("paymentId", paymentId);
+                response.put("impUid", payment.getImpUid() != null ? payment.getImpUid() : paymentId);
+                response.put("orderId", payment.getOrderId());
+                response.put("refundAmount", payment.getAmount());
+                System.out.println("결제 취소 성공 응답 반환: " + response);
+                return ResponseEntity.ok(response);
+            } else {
+                response.put("error", "PortOne 결제 취소 요청이 실패했습니다.");
+                System.out.println("결제 취소 실패 응답 반환: " + response);
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+            }
+        } catch (Exception e) {
+            System.err.println("결제 취소 처리 중 오류 발생: " + e.getMessage());
+            e.printStackTrace();
             Map<String, Object> error = new HashMap<>();
-            error.put("error", "결제 정보를 찾을 수 없습니다. Payment ID: " + paymentId);
-            return Mono.just(ResponseEntity.status(HttpStatus.NOT_FOUND).body(error));
+            error.put("error", "결제 취소 처리 중 오류가 발생했습니다: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
         }
-        
-        Payment payment = paymentOptional.get();
-        
-        // 환불 가능 상태 확인
-        if (payment.getStatus() != Payment.PaymentStatus.PAID && 
-            payment.getStatus() != Payment.PaymentStatus.PARTIALLY_REFUNDED) {
-            Map<String, Object> error = new HashMap<>();
-            error.put("error", "환불할 수 없는 결제 상태입니다. 현재 상태: " + payment.getStatus());
-            return Mono.just(ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error));
-        }
-        
-        // PortOne API로 환불 요청 (포인트 환불 로직은 PaymentService.cancelPayment 내부에서 처리됨)
-        return paymentService.cancelPayment(paymentId, reason)
-                .map(isSuccess -> {
-                    Map<String, Object> response = new HashMap<>();
-                    if (isSuccess) {
-                        response.put("message", "결제 취소가 성공적으로 처리되었습니다. 사용한 포인트도 복구되었습니다.");
-                        response.put("paymentId", paymentId);
-                        response.put("impUid", payment.getImpUid());
-                        response.put("orderId", payment.getOrderId());
-                        response.put("refundAmount", payment.getAmount());
-                        return ResponseEntity.ok(response);
-                    } else {
-                        response.put("error", "PortOne 결제 취소 요청이 실패했습니다.");
-                        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
-                    }
-                })
-                .onErrorReturn(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                        .body(Map.of("error", "결제 취소 처리 중 오류가 발생했습니다.")));
     }
 }
 

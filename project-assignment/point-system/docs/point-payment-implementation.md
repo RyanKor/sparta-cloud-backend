@@ -721,6 +721,759 @@ public class MembershipController {
 
 ---
 
+## 12. 인증 기능 추가하기
+
+**목적**:
+Spring Security와 JWT(JSON Web Token)를 활용하여 RESTful API에 인증 및 인가 기능을 구현합니다. 사용자는 회원가입 및 로그인을 통해 JWT 토큰을 발급받고, 이후 모든 보호된 API 요청 시 이 토큰을 사용하여 인증합니다.
+
+**구현 내용**:
+
+### 1. 의존성 추가 (build.gradle)
+
+```gradle
+dependencies {
+    // Spring Security
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+    
+    // JWT 라이브러리
+    implementation 'io.jsonwebtoken:jjwt-api:0.12.3'
+    runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.3'
+    runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.3'
+    
+    // Validation
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+}
+```
+
+### 2. JWT 유틸리티 구현
+
+**파일**: `src/main/java/com/sparta/point_system/util/JwtUtil.java`
+
+```java
+package com.sparta.point_system.util;
+
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.security.Keys;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+
+import javax.crypto.SecretKey;
+import java.nio.charset.StandardCharsets;
+import java.util.Date;
+import java.util.function.Function;
+
+@Component
+public class JwtUtil {
+
+    @Value("${jwt.secret:your-256-bit-secret-key-for-jwt-token-generation-must-be-at-least-32-characters-long}")
+    private String secret;
+
+    @Value("${jwt.expiration:86400000}") // 24 hours default
+    private Long expiration;
+
+    private SecretKey getSigningKey() {
+        return Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
+    }
+
+    // JWT 토큰 생성
+    public String generateToken(String email, Long userId) {
+        Date now = new Date();
+        Date expiryDate = new Date(now.getTime() + expiration);
+
+        return Jwts.builder()
+                .subject(email)
+                .claim("userId", userId)
+                .issuedAt(now)
+                .expiration(expiryDate)
+                .signWith(getSigningKey())
+                .compact();
+    }
+
+    // 토큰에서 이메일 추출
+    public String getEmailFromToken(String token) {
+        return getClaimFromToken(token, Claims::getSubject);
+    }
+
+    // 토큰에서 사용자 ID 추출
+    public Long getUserIdFromToken(String token) {
+        Claims claims = getAllClaimsFromToken(token);
+        return claims.get("userId", Long.class);
+    }
+
+    // 토큰 유효성 검증
+    public Boolean validateToken(String token) {
+        try {
+            getAllClaimsFromToken(token);
+            return !isTokenExpired(token);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private Claims getAllClaimsFromToken(String token) {
+        return Jwts.parser()
+                .verifyWith(getSigningKey())
+                .build()
+                .parseSignedClaims(token)
+                .getPayload();
+    }
+
+    private <T> T getClaimFromToken(String token, Function<Claims, T> claimsResolver) {
+        final Claims claims = getAllClaimsFromToken(token);
+        return claimsResolver.apply(claims);
+    }
+
+    private Boolean isTokenExpired(String token) {
+        final Date expiration = getClaimFromToken(token, Claims::getExpiration);
+        return expiration.before(new Date());
+    }
+}
+```
+
+**application.properties 설정**:
+```properties
+# JWT Configuration
+jwt.secret=${JWT_SECRET:your-256-bit-secret-key-for-jwt-token-generation-must-be-at-least-32-characters-long}
+jwt.expiration=${JWT_EXPIRATION:86400000}  # 24시간 (밀리초)
+```
+
+### 3. UserDetailsService 구현
+
+**파일**: `src/main/java/com/sparta/point_system/security/UserDetailsServiceImpl.java`
+
+```java
+package com.sparta.point_system.security;
+
+import com.sparta.point_system.entity.User;
+import com.sparta.point_system.repository.UserRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
+import org.springframework.stereotype.Service;
+
+@Service
+public class UserDetailsServiceImpl implements UserDetailsService {
+
+    @Autowired
+    private UserRepository userRepository;
+
+    @Override
+    public UserDetails loadUserByUsername(String email) throws UsernameNotFoundException {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new UsernameNotFoundException("사용자를 찾을 수 없습니다: " + email));
+
+        return org.springframework.security.core.userdetails.User.builder()
+                .username(user.getEmail())
+                .password(user.getPasswordHash())
+                .authorities("ROLE_USER")
+                .build();
+    }
+}
+```
+
+### 4. JWT 인증 필터 구현
+
+**파일**: `src/main/java/com/sparta/point_system/security/JwtAuthenticationFilter.java`
+
+```java
+package com.sparta.point_system.security;
+
+import com.sparta.point_system.util.JwtUtil;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
+import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+import java.io.IOException;
+
+@Component
+public class JwtAuthenticationFilter extends OncePerRequestFilter {
+
+    @Autowired
+    private JwtUtil jwtUtil;
+
+    @Autowired
+    private UserDetailsService userDetailsService;
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
+            throws ServletException, IOException {
+        
+        try {
+            String jwt = getJwtFromRequest(request);
+
+            if (StringUtils.hasText(jwt) && jwtUtil.validateToken(jwt)) {
+                String email = jwtUtil.getEmailFromToken(jwt);
+
+                UserDetails userDetails = userDetailsService.loadUserByUsername(email);
+                UsernamePasswordAuthenticationToken authentication = 
+                    new UsernamePasswordAuthenticationToken(userDetails, null, userDetails.getAuthorities());
+                authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+
+                SecurityContextHolder.getContext().setAuthentication(authentication);
+            }
+        } catch (Exception e) {
+            logger.error("JWT 인증 설정 중 오류 발생", e);
+        }
+
+        filterChain.doFilter(request, response);
+    }
+
+    private String getJwtFromRequest(HttpServletRequest request) {
+        String bearerToken = request.getHeader("Authorization");
+        if (StringUtils.hasText(bearerToken) && bearerToken.startsWith("Bearer ")) {
+            return bearerToken.substring(7);
+        }
+        return null;
+    }
+}
+```
+
+### 5. SecurityConfig 설정
+
+**파일**: `src/main/java/com/sparta/point_system/config/SecurityConfig.java`
+
+```java
+package com.sparta.point_system.config;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sparta.point_system.security.JwtAuthenticationFilter;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
+import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.core.AuthenticationException;
+import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.AuthenticationEntryPoint;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.access.AccessDeniedHandler;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+
+import java.io.IOException;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+@Configuration
+@EnableWebSecurity
+@EnableMethodSecurity
+public class SecurityConfig {
+
+    @Autowired
+    private UserDetailsService userDetailsService;
+
+    @Autowired
+    private JwtAuthenticationFilter jwtAuthenticationFilter;
+
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+
+    @Bean
+    public DaoAuthenticationProvider authenticationProvider() {
+        DaoAuthenticationProvider authProvider = new DaoAuthenticationProvider();
+        authProvider.setUserDetailsService(userDetailsService);
+        authProvider.setPasswordEncoder(passwordEncoder());
+        return authProvider;
+    }
+
+    @Bean
+    public AuthenticationManager authenticationManager(AuthenticationConfiguration authConfig) throws Exception {
+        return authConfig.getAuthenticationManager();
+    }
+
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        http
+            .csrf(csrf -> csrf.disable())
+            .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -> auth
+                // 공개 엔드포인트
+                .requestMatchers("/api/auth/**").permitAll()
+                .requestMatchers("/api/products/**").permitAll()
+                .requestMatchers("/api/product/**").permitAll()
+                .requestMatchers("/error").permitAll()
+                .requestMatchers("/static/**").permitAll()
+                .requestMatchers("/login.html", "/register.html", "/point-payment.html").permitAll()
+                .requestMatchers("/portone-webhook/**").permitAll()
+                // 인증 필요한 엔드포인트
+                .requestMatchers("/api/payments/**").authenticated()
+                .requestMatchers("/api/refunds/**").authenticated()
+                .requestMatchers("/api/orders/**").authenticated()
+                .requestMatchers("/api/points/**").authenticated()
+                .requestMatchers("/api/membership/**").authenticated()
+                // 기타 모든 요청은 인증 필요
+                .anyRequest().authenticated()
+            )
+            .exceptionHandling(exceptions -> exceptions
+                .authenticationEntryPoint(authenticationEntryPoint())
+                .accessDeniedHandler(accessDeniedHandler())
+            )
+            .authenticationProvider(authenticationProvider())
+            .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
+
+        return http.build();
+    }
+
+    // 인증 실패 시 JSON 응답 반환 (리다이렉트 방지)
+    @Bean
+    public AuthenticationEntryPoint authenticationEntryPoint() {
+        return new AuthenticationEntryPoint() {
+            private final ObjectMapper objectMapper = new ObjectMapper();
+
+            @Override
+            public void commence(HttpServletRequest request, HttpServletResponse response,
+                                 AuthenticationException authException) throws IOException {
+                response.setContentType("application/json;charset=UTF-8");
+                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+
+                Map<String, Object> result = new HashMap<>();
+                result.put("error", "인증이 필요합니다.");
+                result.put("message", authException.getMessage());
+                result.put("status", 401);
+
+                response.getWriter().write(objectMapper.writeValueAsString(result));
+            }
+        };
+    }
+
+    // 접근 거부 시 JSON 응답 반환
+    @Bean
+    public AccessDeniedHandler accessDeniedHandler() {
+        return (request, response, accessDeniedException) -> {
+            response.setContentType("application/json;charset=UTF-8");
+            response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+
+            Map<String, Object> result = new HashMap<>();
+            result.put("error", "접근이 거부되었습니다.");
+            result.put("message", accessDeniedException.getMessage());
+            result.put("status", 403);
+
+            ObjectMapper objectMapper = new ObjectMapper();
+            response.getWriter().write(objectMapper.writeValueAsString(result));
+        };
+    }
+
+    // CORS 설정
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration configuration = new CorsConfiguration();
+        configuration.setAllowedOrigins(List.of("*"));
+        configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+        configuration.setAllowedHeaders(List.of("*"));
+        configuration.setExposedHeaders(List.of("Authorization"));
+        configuration.setAllowCredentials(false);
+        
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", configuration);
+        return source;
+    }
+}
+```
+
+### 6. 인증 컨트롤러 구현
+
+**파일**: `src/main/java/com/sparta/point_system/controller/AuthController.java`
+
+**DTO 클래스들**:
+
+```java
+// LoginRequest.java
+package com.sparta.point_system.dto;
+
+import jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.NotBlank;
+import lombok.Getter;
+import lombok.Setter;
+
+@Getter
+@Setter
+public class LoginRequest {
+    @NotBlank(message = "이메일은 필수입니다.")
+    @Email(message = "유효한 이메일 형식이 아닙니다.")
+    private String email;
+    
+    @NotBlank(message = "비밀번호는 필수입니다.")
+    private String password;
+}
+
+// RegisterRequest.java
+package com.sparta.point_system.dto;
+
+import jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
+import lombok.Getter;
+import lombok.Setter;
+
+@Getter
+@Setter
+public class RegisterRequest {
+    @NotBlank(message = "이메일은 필수입니다.")
+    @Email(message = "유효한 이메일 형식이 아닙니다.")
+    private String email;
+    
+    @NotBlank(message = "비밀번호는 필수입니다.")
+    @Size(min = 6, message = "비밀번호는 최소 6자 이상이어야 합니다.")
+    private String password;
+    
+    @NotBlank(message = "이름은 필수입니다.")
+    private String name;
+}
+
+// AuthResponse.java
+package com.sparta.point_system.dto;
+
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+public class AuthResponse {
+    private String token;
+    private String email;
+    private Long userId;
+    private String name;
+    private String message;
+}
+```
+
+**AuthController 구현**:
+
+```java
+package com.sparta.point_system.controller;
+
+import com.sparta.point_system.dto.AuthResponse;
+import com.sparta.point_system.dto.LoginRequest;
+import com.sparta.point_system.dto.RegisterRequest;
+import com.sparta.point_system.entity.User;
+import com.sparta.point_system.repository.UserRepository;
+import com.sparta.point_system.util.JwtUtil;
+import jakarta.validation.Valid;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.HashMap;
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/auth")
+@CrossOrigin(origins = "*")
+public class AuthController {
+
+    @Autowired
+    private UserRepository userRepository;
+
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    @Autowired
+    private JwtUtil jwtUtil;
+
+    @Autowired
+    private AuthenticationManager authenticationManager;
+
+    // 회원가입
+    @PostMapping("/register")
+    public ResponseEntity<?> register(@Valid @RequestBody RegisterRequest request) {
+        try {
+            // 이메일 중복 확인
+            if (userRepository.findByEmail(request.getEmail()).isPresent()) {
+                Map<String, String> error = new HashMap<>();
+                error.put("error", "이미 사용 중인 이메일입니다.");
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+            }
+
+            // 새 사용자 생성
+            User user = new User();
+            user.setEmail(request.getEmail());
+            user.setPasswordHash(passwordEncoder.encode(request.getPassword()));
+            user.setName(request.getName());
+
+            User savedUser = userRepository.save(user);
+
+            // JWT 토큰 생성
+            String token = jwtUtil.generateToken(savedUser.getEmail(), savedUser.getUserId());
+
+            AuthResponse response = new AuthResponse();
+            response.setToken(token);
+            response.setEmail(savedUser.getEmail());
+            response.setUserId(savedUser.getUserId());
+            response.setName(savedUser.getName());
+            response.setMessage("회원가입이 완료되었습니다.");
+
+            return ResponseEntity.status(HttpStatus.CREATED).body(response);
+        } catch (Exception e) {
+            Map<String, String> error = new HashMap<>();
+            error.put("error", "회원가입 중 오류가 발생했습니다: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+        }
+    }
+
+    // 로그인
+    @PostMapping("/login")
+    public ResponseEntity<?> login(@Valid @RequestBody LoginRequest request) {
+        try {
+            // 인증 시도
+            Authentication authentication = authenticationManager.authenticate(
+                new UsernamePasswordAuthenticationToken(request.getEmail(), request.getPassword())
+            );
+
+            // 사용자 정보 조회
+            User user = userRepository.findByEmail(request.getEmail())
+                    .orElseThrow(() -> new RuntimeException("사용자를 찾을 수 없습니다."));
+
+            // JWT 토큰 생성
+            String token = jwtUtil.generateToken(user.getEmail(), user.getUserId());
+
+            AuthResponse response = new AuthResponse();
+            response.setToken(token);
+            response.setEmail(user.getEmail());
+            response.setUserId(user.getUserId());
+            response.setName(user.getName());
+            response.setMessage("로그인이 완료되었습니다.");
+
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            Map<String, String> error = new HashMap<>();
+            error.put("error", "로그인 실패: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error);
+        }
+    }
+
+    // 현재 사용자 정보 조회
+    @GetMapping("/me")
+    public ResponseEntity<?> getCurrentUser(@RequestHeader(value = "Authorization", required = false) String token) {
+        try {
+            if (token == null || !token.startsWith("Bearer ")) {
+                Map<String, String> error = new HashMap<>();
+                error.put("error", "인증 토큰이 필요합니다.");
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error);
+            }
+
+            String jwt = token.substring(7);
+            if (!jwtUtil.validateToken(jwt)) {
+                Map<String, String> error = new HashMap<>();
+                error.put("error", "유효하지 않은 토큰입니다.");
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error);
+            }
+
+            String email = jwtUtil.getEmailFromToken(jwt);
+            User user = userRepository.findByEmail(email)
+                    .orElseThrow(() -> new RuntimeException("사용자를 찾을 수 없습니다."));
+
+            Map<String, Object> userInfo = new HashMap<>();
+            userInfo.put("userId", user.getUserId());
+            userInfo.put("email", user.getEmail());
+            userInfo.put("name", user.getName());
+
+            return ResponseEntity.ok(userInfo);
+        } catch (Exception e) {
+            Map<String, String> error = new HashMap<>();
+            error.put("error", "사용자 정보 조회 실패: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error);
+        }
+    }
+}
+```
+
+### 7. 보호된 API 구현 (인증된 사용자 정보 사용)
+
+**SecurityUtil 유틸리티**:
+
+```java
+package com.sparta.point_system.util;
+
+import com.sparta.point_system.entity.User;
+import com.sparta.point_system.repository.UserRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.stereotype.Component;
+
+@Component
+public class SecurityUtil {
+
+    @Autowired
+    private UserRepository userRepository;
+
+    public String getCurrentUserEmail() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication != null && authentication.getPrincipal() instanceof UserDetails) {
+            UserDetails userDetails = (UserDetails) authentication.getPrincipal();
+            return userDetails.getUsername();
+        }
+        return null;
+    }
+
+    public Long getCurrentUserId() {
+        String email = getCurrentUserEmail();
+        if (email != null) {
+            return userRepository.findByEmail(email)
+                    .map(User::getUserId)
+                    .orElse(null);
+        }
+        return null;
+    }
+
+    public User getCurrentUser() {
+        String email = getCurrentUserEmail();
+        if (email != null) {
+            return userRepository.findByEmail(email).orElse(null);
+        }
+        return null;
+    }
+}
+```
+
+**보호된 API 예시**:
+
+```java
+@RestController
+@RequestMapping("/api/points")
+public class PointController {
+    
+    @Autowired
+    private PointService pointService;
+    
+    @Autowired
+    private SecurityUtil securityUtil;
+    
+    @GetMapping("/balance")
+    public ResponseEntity<Map<String, Object>> getPointBalance() {
+        // SecurityContext에서 현재 사용자 정보 가져오기
+        Long userId = securityUtil.getCurrentUserId();
+        
+        if (userId == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        
+        Integer balance = pointService.getPointBalance(userId);
+        Map<String, Object> response = new HashMap<>();
+        response.put("userId", userId);
+        response.put("balance", balance);
+        return ResponseEntity.ok(response);
+    }
+}
+```
+
+### 8. API 사용 예시
+
+**회원가입**:
+```bash
+POST /api/auth/register
+Content-Type: application/json
+
+{
+  "email": "user@example.com",
+  "password": "password123",
+  "name": "홍길동"
+}
+
+# 응답
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "email": "user@example.com",
+  "userId": 1,
+  "name": "홍길동",
+  "message": "회원가입이 완료되었습니다."
+}
+```
+
+**로그인**:
+```bash
+POST /api/auth/login
+Content-Type: application/json
+
+{
+  "email": "user@example.com",
+  "password": "password123"
+}
+
+# 응답
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "email": "user@example.com",
+  "userId": 1,
+  "name": "홍길동",
+  "message": "로그인이 완료되었습니다."
+}
+```
+
+**보호된 API 호출**:
+```bash
+GET /api/points/balance
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+# 응답
+{
+  "userId": 1,
+  "balance": 100000
+}
+```
+
+**현재 사용자 정보 조회**:
+```bash
+GET /api/auth/me
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+# 응답
+{
+  "userId": 1,
+  "email": "user@example.com",
+  "name": "홍길동"
+}
+```
+
+**주요 고려사항**:
+
+1. **JWT Secret Key**: 프로덕션 환경에서는 반드시 강력한 비밀키를 사용하고 환경 변수로 관리해야 합니다.
+2. **토큰 만료 시간**: 보안을 위해 적절한 만료 시간을 설정합니다 (기본 24시간).
+3. **HTTPS 사용**: 프로덕션 환경에서는 반드시 HTTPS를 사용하여 토큰이 노출되지 않도록 합니다.
+4. **CORS 설정**: 프론트엔드와 백엔드가 다른 도메인에 있는 경우 CORS 설정이 필요합니다.
+5. **인증 실패 처리**: 인증 실패 시 JSON 응답을 반환하여 리다이렉트를 방지합니다 (SPA 환경에 적합).
+6. **세션 관리**: JWT 기반 인증은 Stateless이므로 `SessionCreationPolicy.STATELESS`로 설정합니다.
+
+---
+
 ## 주요 고려사항
 
 ### 1. 트랜잭션 관리

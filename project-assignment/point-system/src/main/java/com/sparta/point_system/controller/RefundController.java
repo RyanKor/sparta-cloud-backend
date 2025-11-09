@@ -9,6 +9,7 @@ import com.sparta.point_system.repository.OrderRepository;
 import com.sparta.point_system.service.MembershipService;
 import com.sparta.point_system.service.PaymentService;
 import com.sparta.point_system.service.PointService;
+import com.sparta.point_system.util.SecurityUtil;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -43,6 +44,9 @@ public class RefundController {
     
     @Autowired
     private MembershipService membershipService;
+    
+    @Autowired
+    private SecurityUtil securityUtil;
 
     @PostMapping("/refund")
     public Refund createRefund(@RequestParam Long paymentId,
@@ -101,6 +105,14 @@ public class RefundController {
     @PostMapping("/request")
     public Mono<ResponseEntity<Map<String, Object>>> requestRefund(@RequestBody Map<String, Object> refundRequest) {
         try {
+            // 인증된 사용자 ID 가져오기
+            Long currentUserId = securityUtil.getCurrentUserId();
+            if (currentUserId == null) {
+                Map<String, Object> error = new HashMap<>();
+                error.put("error", "인증이 필요합니다.");
+                return Mono.just(ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error));
+            }
+            
             System.out.println("환불 요청 받음: " + refundRequest);
             
             Long paymentId = null;
@@ -125,6 +137,17 @@ public class RefundController {
             }
             
             Payment payment = paymentOptional.get();
+            
+            // 주문 소유자 확인
+            Optional<Order> orderOptional = orderRepository.findByOrderId(payment.getOrderId());
+            if (orderOptional.isPresent()) {
+                Order order = orderOptional.get();
+                if (!order.getUserId().equals(currentUserId)) {
+                    Map<String, Object> error = new HashMap<>();
+                    error.put("error", "다른 사용자의 결제를 환불할 수 없습니다.");
+                    return Mono.just(ResponseEntity.status(HttpStatus.FORBIDDEN).body(error));
+                }
+            }
             
             // 2. 환불 가능 상태 확인
             if (payment.getStatus() != Payment.PaymentStatus.PAID && 
@@ -160,8 +183,7 @@ public class RefundController {
                 try {
                     String orderId = payment.getOrderId();
                     
-                    // 주문 정보 조회
-                    Optional<Order> orderOptional = orderRepository.findByOrderId(orderId);
+                    // 주문 정보 조회 (이미 위에서 조회한 orderOptional 재사용)
                     if (orderOptional.isPresent()) {
                         Order order = orderOptional.get();
                         Long userId = order.getUserId();
@@ -295,9 +317,9 @@ public class RefundController {
                             // 하지만 추가로 확인하기 위해 주문 정보를 조회하여 업데이트
                             try {
                                 String orderId = payment.getOrderId();
-                                Optional<Order> orderOptional = orderRepository.findByOrderId(orderId);
-                                if (orderOptional.isPresent()) {
-                                    Long userId = orderOptional.get().getUserId();
+                                Optional<Order> refundOrderOptional = orderRepository.findByOrderId(orderId);
+                                if (refundOrderOptional.isPresent()) {
+                                    Long userId = refundOrderOptional.get().getUserId();
                                     membershipService.updateMembershipLevel(userId);
                                     System.out.println("환불 후 멤버십 등급이 자동 업데이트되었습니다. User ID: " + userId);
                                 }

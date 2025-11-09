@@ -410,6 +410,35 @@
         .hidden-field {
             display: none;
         }
+
+        .user-info {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px;
+            background: white;
+            border-radius: 8px;
+            margin-bottom: 12px;
+        }
+
+        .user-info span {
+            font-weight: 600;
+            color: #333;
+        }
+
+        .logout-btn {
+            padding: 6px 12px;
+            background: #dc3545;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .logout-btn:hover {
+            background: #c82333;
+        }
     </style>
 </head>
 <body>
@@ -420,6 +449,12 @@
             <h2>Sparta Point Shop</h2>
         </div>
         <span class="badge">포인트 결제 테스트</span>
+    </div>
+
+    <!-- 사용자 정보 섹션 (로그인 후 표시) -->
+    <div class="user-info" id="userInfoSection" style="display: none;">
+        <span id="userInfoText">사용자 정보</span>
+        <button class="logout-btn" onclick="handleLogout()">로그아웃</button>
     </div>
 
     <h1>🛒 스파르타 포인트 스토어</h1>
@@ -517,11 +552,170 @@
     const API_BASE_URL = '';
     const STORE_ID = 'store-18cc2578-590f-4da9-be72-0aeac4a12638';
     const CHANNEL_KEY = 'channel-key-f629850f-544f-4cf9-ad22-1b561acf42d0';
-    const USER_ID = 1;
+    
+    let USER_ID = null;
+    let authToken = null;
+    let currentUser = null;
+    let isAuthChecking = false; // 인증 상태 확인 중 플래그
+    let authCheckPromise = null; // 인증 상태 확인 Promise
 
     let currentProduct = null;
     let pointBalance = 0;
     let membershipInfo = null;
+
+    // JWT 토큰 관리
+    function getAuthToken() {
+        return localStorage.getItem('authToken');
+    }
+
+    function setAuthToken(token) {
+        authToken = token;
+        localStorage.setItem('authToken', token);
+    }
+
+    function removeAuthToken() {
+        authToken = null;
+        localStorage.removeItem('authToken');
+        localStorage.removeItem('userId');
+        localStorage.removeItem('userEmail');
+        localStorage.removeItem('userName');
+    }
+
+    function getAuthHeaders() {
+        const token = getAuthToken();
+        if (!token) {
+            return { 'Content-Type': 'application/json' };
+        }
+        return {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+        };
+    }
+
+    // 인증된 API 호출
+    async function authenticatedFetch(url, options = {}) {
+        // 인증 상태 확인이 진행 중이면 완료될 때까지 대기
+        if (authCheckPromise) {
+            try {
+                await authCheckPromise;
+            } catch (error) {
+                // 인증 실패 시 에러는 checkAuthStatus에서 처리하므로 여기서는 무시
+            }
+        }
+        
+        const headers = { ...getAuthHeaders(), ...(options.headers || {}) };
+        const response = await fetch(url, { ...options, headers });
+        
+        if (response.status === 401 || response.status === 403) {
+            // 인증 실패 시 - 토큰이 만료된 경우에만 로그아웃
+            // 단, 인증 상태 확인이 진행 중이 아닐 때만 처리
+            if (!isAuthChecking) {
+                const token = getAuthToken();
+                if (!token) {
+                    // 토큰이 없으면 이미 로그아웃된 상태
+                    handleLogout();
+                    throw new Error('인증이 필요합니다.');
+                }
+                // 토큰이 있는데 401이면 만료된 것 - 로그아웃 처리
+                console.warn('인증 토큰이 만료되었습니다.');
+                handleLogout();
+                showResult('error', '❌ 인증 오류', '인증이 만료되었거나 유효하지 않습니다. 다시 로그인해주세요.');
+                throw new Error('인증이 필요합니다.');
+            }
+        }
+        
+        return response;
+    }
+
+    // 로그아웃 처리
+    function handleLogout() {
+        removeAuthToken();
+        USER_ID = null;
+        currentUser = null;
+
+        // 로그인 페이지로 이동
+        window.location.href = 'login.html';
+    }
+
+    // 인증 상태 확인
+    async function checkAuthStatus() {
+        // 이미 인증 확인이 진행 중이면 기존 Promise 반환
+        if (isAuthChecking && authCheckPromise) {
+            return authCheckPromise;
+        }
+        
+        isAuthChecking = true;
+        authCheckPromise = (async () => {
+            try {
+                const token = getAuthToken();
+                const savedUserId = localStorage.getItem('userId');
+                
+                if (!token || !savedUserId) {
+                    // 토큰이 없으면 로그인 페이지로 이동
+                    console.warn('인증 토큰이 없습니다.');
+                    window.location.href = 'login.html';
+                    return false;
+                }
+
+                // 토큰이 있으면 일단 사용자 정보 설정 (리다이렉트 후 즉시 사용 가능하도록)
+                USER_ID = parseInt(savedUserId);
+                authToken = token;
+                document.getElementById('userInfoSection').style.display = 'block';
+                document.getElementById('userId').value = savedUserId;
+
+                try {
+                    const response = await fetch(`${API_BASE_URL}/api/auth/me`, {
+                        headers: {
+                            'Authorization': `Bearer ${token}`
+                        }
+                    });
+
+                    if (response.ok) {
+                        const userData = await response.json();
+                        USER_ID = userData.userId;
+                        currentUser = userData;
+                        authToken = token;
+
+                        // UI 업데이트
+                        document.getElementById('userInfoSection').style.display = 'block';
+                        document.getElementById('userInfoText').textContent = `${userData.name} (${userData.email})`;
+                        document.getElementById('userId').value = userData.userId;
+
+                        return true;
+                    } else if (response.status === 401) {
+                        // 401 Unauthorized: 토큰이 만료되었거나 유효하지 않음
+                        // 응답 본문 확인
+                        try {
+                            const errorData = await response.json();
+                            console.warn('인증 토큰이 유효하지 않습니다:', errorData);
+                        } catch (e) {
+                            console.warn('인증 토큰이 유효하지 않습니다. Status:', response.status);
+                        }
+                        
+                        // 토큰이 만료된 경우에만 로그인 페이지로 이동
+                        removeAuthToken();
+                        window.location.href = 'login.html';
+                        return false;
+                    } else {
+                        // 기타 오류 (403, 500 등) - 네트워크 오류일 수 있으므로 토큰은 유지
+                        console.warn('인증 상태 확인 실패, 하지만 토큰은 유지합니다. Status:', response.status);
+                        // 토큰이 있으면 일단 사용 (네트워크 일시적 오류일 수 있음)
+                        document.getElementById('userInfoText').textContent = `사용자 ID: ${savedUserId}`;
+                        return true;
+                    }
+                } catch (error) {
+                    // 네트워크 오류 등 - 토큰이 있으면 일단 유지
+                    console.warn('인증 상태 확인 중 네트워크 오류 발생, 토큰은 유지합니다:', error);
+                    document.getElementById('userInfoText').textContent = `사용자 ID: ${savedUserId}`;
+                    return true; // 네트워크 오류는 일시적일 수 있으므로 true 반환
+                }
+            } finally {
+                isAuthChecking = false;
+            }
+        })();
+        
+        return authCheckPromise;
+    }
 
     // 결과 표시 함수
     function showResult(type, title, message, data = null) {
@@ -540,8 +734,13 @@
 
     // 포인트 잔액 조회
     async function loadPointBalance() {
+        if (!USER_ID) {
+            console.warn('사용자 ID가 없습니다. 로그인이 필요합니다.');
+            return;
+        }
+
         try {
-            const response = await fetch(`${API_BASE_URL}/api/points/balance/${USER_ID}`);
+            const response = await authenticatedFetch(`${API_BASE_URL}/api/points/balance/${USER_ID}`);
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
@@ -568,8 +767,13 @@
 
     // 멤버십 정보 조회
     async function loadMembershipInfo() {
+        if (!USER_ID) {
+            displayMembershipInfo('Normal', 0);
+            return;
+        }
+
         try {
-            const response = await fetch(`${API_BASE_URL}/api/membership/user/${USER_ID}/info`);
+            const response = await authenticatedFetch(`${API_BASE_URL}/api/membership/user/${USER_ID}/info`);
             if (!response.ok) {
                 // API 호출 실패 시 기본값 표시
                 console.warn('멤버십 정보 조회 실패, 기본값 사용:', response.status);
@@ -619,10 +823,15 @@
 
     // 결제 내역 조회
     async function loadPaymentHistory() {
+        if (!USER_ID) {
+            showResult('error', '❌ 인증 필요', '로그인이 필요합니다.');
+            return;
+        }
+
         try {
             showResult('info', '⏳ 조회 중...', '결제 내역을 조회하고 있습니다...');
 
-            const response = await fetch(`${API_BASE_URL}/api/membership/user/${USER_ID}/payments`);
+            const response = await authenticatedFetch(`${API_BASE_URL}/api/membership/user/${USER_ID}/payments`);
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
@@ -674,10 +883,15 @@
 
     // 포인트 충전 (100,000 포인트)
     async function chargePoints() {
+        if (!USER_ID) {
+            showResult('error', '❌ 인증 필요', '로그인이 필요합니다.');
+            return;
+        }
+
         try {
             showResult('info', '⏳ 포인트 충전 중...', '100,000 포인트를 충전하고 있습니다...');
 
-            const response = await fetch(`${API_BASE_URL}/api/points/charge/${USER_ID}?points=100000&description=테스트용 포인트 충전`, {
+            const response = await authenticatedFetch(`${API_BASE_URL}/api/points/charge/${USER_ID}?points=100000&description=테스트용 포인트 충전`, {
                 method: 'POST'
             });
 
@@ -796,8 +1010,13 @@
 
     // 결제 처리
     async function processPayment() {
+        if (!USER_ID) {
+            showResult('error', '❌ 인증 필요', '로그인이 필요합니다.');
+            return;
+        }
+
         const orderId = document.getElementById('orderId').value;
-        const userId = document.getElementById('userId').value;
+        const userId = USER_ID; // 인증된 사용자 ID 사용
         const productId = document.getElementById('productId').value;
         const orderName = document.getElementById('orderName').value;
         const productPrice = parseFloat(currentProduct.price) || 0;
@@ -836,11 +1055,9 @@
                 }]
             };
 
-            const response = await fetch(`${API_BASE_URL}/api/payments/request`, {
+            const response = await authenticatedFetch(`${API_BASE_URL}/api/payments/request`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers: getAuthHeaders(),
                 body: JSON.stringify(paymentRequest)
             });
 
@@ -855,11 +1072,9 @@
             // 2. 최종 결제 금액이 0원이면 포인트로 전액 결제 완료
             if (finalAmount <= 0) {
                 // 포인트 전액 결제 완료 처리 API 호출
-                const completeResponse = await fetch(`${API_BASE_URL}/api/payments/complete-point-payment`, {
+                const completeResponse = await authenticatedFetch(`${API_BASE_URL}/api/payments/complete-point-payment`, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
+                    headers: getAuthHeaders(),
                     body: JSON.stringify({
                         orderId: orderId
                     })
@@ -890,6 +1105,9 @@
 
             const paymentId = `payment-${Date.now()}`;
 
+            // 현재 페이지 URL을 리다이렉트 URL로 설정 (결제 완료 후 같은 페이지로 돌아옴)
+            const redirectUrl = window.location.origin + window.location.pathname;
+            
             const paymentResponse = await PortOne.requestPayment({
                 storeId: STORE_ID,
                 channelKey: CHANNEL_KEY,
@@ -900,11 +1118,12 @@
                 payMethod: 'CARD',
                 pg: "inicis_v2",
                 customer: {
-                    customerId: userId,
+                    customerId: String(userId), // PortOne API는 customerId를 문자열로 요구
                     fullName: "테스트 사용자",
                     phoneNumber: "010-1234-5678",
                     email: "test@example.com"
                 },
+                redirectUrl: redirectUrl, // 결제 완료 후 리다이렉트 URL
                 testMode: true,
                 customData: {
                     orderId: orderId
@@ -940,11 +1159,9 @@
     // 결제 검증
     async function verifyPayment(paymentId) {
         try {
-            const response = await fetch(`${API_BASE_URL}/api/payments/complete`, {
+            const response = await authenticatedFetch(`${API_BASE_URL}/api/payments/complete`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers: getAuthHeaders(),
                 body: JSON.stringify({
                     paymentId: paymentId
                 })
@@ -971,6 +1188,11 @@
 
     // 주문 조회
     async function checkOrder() {
+        if (!USER_ID) {
+            showResult('error', '❌ 인증 필요', '로그인이 필요합니다.');
+            return;
+        }
+
         const orderId = document.getElementById('orderId').value;
 
         if (!orderId) {
@@ -981,7 +1203,7 @@
         try {
             showResult('info', '⏳ 조회 중...', '주문 정보를 조회하고 있습니다...');
 
-            const response = await fetch(`${API_BASE_URL}/api/order/${orderId}`);
+            const response = await authenticatedFetch(`${API_BASE_URL}/api/order/${orderId}`);
 
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
@@ -1030,15 +1252,32 @@
     }
 
     // 페이지 로드 시 초기화
-    window.addEventListener('load', function() {
+    window.addEventListener('load', async function() {
         const today = new Date();
         const dateStr = today.toISOString().split('T')[0].replace(/-/g, '');
         const randomNum = Math.floor(Math.random() * 10000).toString().padStart(5, '0');
         document.getElementById('orderId').value = `order_${dateStr}_${randomNum}`;
         
-        // 포인트 잔액, 멤버십 정보 및 상품 정보 로드
-        loadPointBalance();
-        loadProductInfo();
+        try {
+            // 인증 상태 확인 - 반드시 완료될 때까지 대기
+            const isAuthenticated = await checkAuthStatus();
+            
+            if (isAuthenticated) {
+                // 인증된 경우 포인트 잔액, 멤버십 정보 및 상품 정보 로드
+                // 인증이 완료된 후에만 호출되도록 보장
+                await Promise.all([
+                    loadPointBalance(),
+                    loadProductInfo()
+                ]);
+            } else {
+                // 인증되지 않은 경우 상품 정보만 로드 (공개 API)
+                loadProductInfo();
+            }
+        } catch (error) {
+            console.error('페이지 초기화 중 오류:', error);
+            // 오류 발생 시에도 상품 정보는 로드
+            loadProductInfo();
+        }
     });
 </script>
 </body>
