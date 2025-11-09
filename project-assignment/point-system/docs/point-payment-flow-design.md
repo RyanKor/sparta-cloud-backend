@@ -15,7 +15,7 @@
 ### 1. 주문 생성 플로우
 
 **처리 단계**:
-1. 주문번호 생성 (UUID 또는 타임스탬프 기반 커스텀 형식)
+1. 주문번호 생성 (포인트가 있기 때문에 orderID와 포트원 payment-시간정보 id를 분리해서 관리합니다.)
 2. 주문 총액 계산 (포인트 할인 반영)
 3. 주문 아이템 정보 저장
 4. 주문 상태를 `PENDING_PAYMENT`로 설정
@@ -208,11 +208,11 @@
 ### 6. 결제 취소/환불 플로우
 
 #### 6-1. 환불 처리 단계
-1. 결제 상태 확인 (PAID 또는 PARTIALLY_REFUNDED만 환불 가능)
+1. 결제 상태 확인 (PAID만 환불 가능)
 2. 사용한 포인트 복구 (point_transactions에서 SPENT 타입 거래 확인)
 3. 적립된 포인트 취소 (point_transactions에서 EARNED 타입 거래 확인)
 4. 주문 상태를 `CANCELLED`로 변경
-5. 결제 상태를 `REFUNDED` 또는 `PARTIALLY_REFUNDED`로 변경
+5. 결제 상태를 `REFUNDED` 로 변경
 6. 환불 레코드 생성
 
 #### 6-2. 멤버십 등급 갱신 (환불 후)
