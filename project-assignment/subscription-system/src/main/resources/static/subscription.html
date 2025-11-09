@@ -575,8 +575,8 @@
     const API_BASE_URL = '';
     // PortOne Store ID 및 Channel Key (토스페이먼츠 정기결제 채널)
     // PortOne 관리자 콘솔 > 연동 관리 > 채널에서 확인 가능
-    const STORE_ID = '';
-    const CHANNEL_KEY = '';
+    const STORE_ID = 'store-18cc2578-590f-4da9-be72-0aeac4a12638';
+    const CHANNEL_KEY = 'channel-key-6579eebb-e5d9-4c95-b130-3ab4aba15447';
     
     let USER_ID = 1; // 기본값
     let currentSubscription = null;
@@ -710,6 +710,8 @@
                 // 이니시스 V2 채널 사용 시 필수 (토스페이먼츠 등 다른 PG사에서는 무시됨)
                 issueName: issueName,
                 issueId: issueId,
+                // 리디렉션 방식 빌링키 발급 시 필수: 결제 완료 후 돌아올 URL
+                redirectUrl: window.location.href,
                 testMode: true
             });
 

@@ -8,6 +8,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -111,16 +112,39 @@ public class SubscriptionService {
 
         // 결제 수단이 있고 활성 상태인 경우 예약결제 스케줄 생성
         if (paymentMethod != null && (status == Subscription.SubscriptionStatus.ACTIVE || status == Subscription.SubscriptionStatus.TRIALING)) {
-            createBillingSchedule(savedSubscription).subscribe(
-                    result -> {
-                        // 스케줄 생성 성공 (로그만 남김)
-                        System.out.println("예약결제 스케줄 생성 성공: subscriptionId=" + savedSubscription.getSubscriptionId());
-                    },
-                    error -> {
-                        // 스케줄 생성 실패 시 로그만 남김 (구독은 이미 생성됨)
-                        System.err.println("예약결제 스케줄 생성 실패: " + error.getMessage());
-                    }
-            );
+            createBillingSchedule(savedSubscription)
+                    .flatMap(result -> {
+                        // 스케줄 생성 응답에서 scheduleId 추출
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> scheduleResponse = (Map<String, Object>) result;
+                        String scheduleId = extractScheduleIdFromResponse(scheduleResponse, savedSubscription.getSubscriptionId());
+                        
+                        if (scheduleId != null && !scheduleId.trim().isEmpty()) {
+                            // 응답에서 scheduleId를 찾았으면 저장하고 반환
+                            savedSubscription.setScheduleId(scheduleId);
+                            subscriptionRepository.save(savedSubscription);
+                            System.out.println("예약결제 스케줄 생성 성공: subscriptionId=" + savedSubscription.getSubscriptionId() + 
+                                             ", scheduleId=" + scheduleId);
+                            return Mono.just(true);
+                        } else {
+                            // 응답에서 scheduleId를 찾지 못한 경우, 스케줄 목록을 조회해서 찾기
+                            System.out.println("[스케줄 생성] 응답에서 scheduleId를 찾지 못함. 스케줄 목록 조회로 fallback: subscriptionId=" + 
+                                             savedSubscription.getSubscriptionId());
+                            return findScheduleIdFromSchedules(savedSubscription);
+                        }
+                    })
+                    .subscribe(
+                            success -> {
+                                if (success) {
+                                    System.out.println("예약결제 스케줄 생성 및 scheduleId 저장 완료: subscriptionId=" + savedSubscription.getSubscriptionId());
+                                }
+                            },
+                            error -> {
+                                // 스케줄 생성 실패 시 로그만 남김 (구독은 이미 생성됨)
+                                System.err.println("예약결제 스케줄 생성 실패: " + error.getMessage());
+                                error.printStackTrace();
+                            }
+                    );
         }
 
         return savedSubscription;
@@ -246,16 +270,27 @@ public class SubscriptionService {
             throw new RuntimeException("Subscription is already canceled or ended");
         }
 
-        // PortOne API를 통해 예약결제 스케줄 삭제
-        deleteBillingSchedule(subscription).subscribe(
-                result -> {
+        // PortOne API를 통해 예약결제 스케줄 삭제 (동기적으로 처리)
+        PaymentMethod paymentMethod = subscription.getPaymentMethod();
+        if (paymentMethod != null && paymentMethod.getCustomerUid() != null) {
+            try {
+                Boolean deleteResult = deleteBillingSchedule(subscription).block(Duration.ofSeconds(10));
+                if (deleteResult != null && deleteResult) {
                     System.out.println("예약결제 스케줄 삭제 성공: subscriptionId=" + subscriptionId);
-                },
-                error -> {
-                    System.err.println("예약결제 스케줄 삭제 실패: " + error.getMessage());
-                    // 스케줄 삭제 실패해도 구독 취소는 진행
+                } else {
+                    System.err.println("예약결제 스케줄 삭제 실패: subscriptionId=" + subscriptionId);
+                    // 스케줄 삭제 실패 시 예외를 던져서 구독 취소를 중단할지 결정할 수 있음
+                    // 현재는 로그만 남기고 계속 진행
                 }
-        );
+            } catch (Exception e) {
+                System.err.println("예약결제 스케줄 삭제 중 오류 발생: subscriptionId=" + subscriptionId + ", error=" + e.getMessage());
+                e.printStackTrace();
+                // 스케줄 삭제 실패해도 구독 취소는 진행 (로그만 남김)
+                // 필요시 여기서 예외를 던져서 구독 취소를 중단할 수 있음
+            }
+        } else {
+            System.out.println("결제 수단 또는 customerUid가 없어 스케줄 삭제를 건너뜁니다: subscriptionId=" + subscriptionId);
+        }
 
         // 구독 상태를 취소로 변경
         subscription.setStatus(Subscription.SubscriptionStatus.CANCELED);
@@ -461,6 +496,12 @@ public class SubscriptionService {
                         Map<String, Object> scheduleRequest = new java.util.HashMap<>();
                         scheduleRequest.put("payment", payment);
                         scheduleRequest.put("timeToPay", timeToPay);
+                        
+                        // metadata에 subscriptionId를 포함하여 나중에 스케줄 삭제 시 사용
+                        Map<String, Object> metadata = new java.util.HashMap<>();
+                        metadata.put("subscriptionId", subscription.getSubscriptionId());
+                        metadata.put("userId", subscription.getUser().getUserId());
+                        scheduleRequest.put("metadata", metadata);
 
                         return portOneClient.createSchedule(paymentId, scheduleRequest, accessToken);
                     })
@@ -539,6 +580,12 @@ public class SubscriptionService {
                                     Map<String, Object> scheduleRequest = new java.util.HashMap<>();
                                     scheduleRequest.put("payment", payment);
                                     scheduleRequest.put("timeToPay", timeToPay);
+                                    
+                                    // metadata에 subscriptionId를 포함하여 나중에 스케줄 삭제 시 사용
+                                    Map<String, Object> metadata = new java.util.HashMap<>();
+                                    metadata.put("subscriptionId", subscription.getSubscriptionId());
+                                    metadata.put("userId", subscription.getUser().getUserId());
+                                    scheduleRequest.put("metadata", metadata);
 
                                     return portOneClient.createSchedule(paymentId, scheduleRequest, accessToken);
                                 });
@@ -548,65 +595,243 @@ public class SubscriptionService {
     }
 
     /**
-     * 예약결제 스케줄 삭제
+     * 스케줄 생성 응답에서 scheduleId 추출
      */
-    public Mono<Boolean> deleteBillingSchedule(Subscription subscription) {
+    private String extractScheduleIdFromResponse(Map<String, Object> scheduleResponse, Long subscriptionId) {
+        // 디버깅: 응답 전체 구조 로그 출력
+        System.out.println("[스케줄 생성 응답] subscriptionId=" + subscriptionId + 
+                         ", 응답: " + scheduleResponse);
+        
+        String scheduleId = null;
+        
+        // 응답 구조에 따라 scheduleId 추출 (여러 가능한 필드명 확인)
+        // 1. 직접 id 필드
+        if (scheduleResponse.containsKey("id")) {
+            Object idObj = scheduleResponse.get("id");
+            if (idObj != null) {
+                scheduleId = idObj.toString();
+            }
+        }
+        // 2. scheduleId 필드
+        else if (scheduleResponse.containsKey("scheduleId")) {
+            Object scheduleIdObj = scheduleResponse.get("scheduleId");
+            if (scheduleIdObj != null) {
+                scheduleId = scheduleIdObj.toString();
+            }
+        }
+        // 3. 중첩된 schedule 객체 내부의 id
+        else if (scheduleResponse.containsKey("schedule")) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> scheduleObj = (Map<String, Object>) scheduleResponse.get("schedule");
+            if (scheduleObj != null) {
+                if (scheduleObj.containsKey("id")) {
+                    Object idObj = scheduleObj.get("id");
+                    if (idObj != null) {
+                        scheduleId = idObj.toString();
+                    }
+                } else if (scheduleObj.containsKey("scheduleId")) {
+                    Object scheduleIdObj = scheduleObj.get("scheduleId");
+                    if (scheduleIdObj != null) {
+                        scheduleId = scheduleIdObj.toString();
+                    }
+                }
+            }
+        }
+        // 4. data 객체 내부 확인
+        else if (scheduleResponse.containsKey("data")) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> dataObj = (Map<String, Object>) scheduleResponse.get("data");
+            if (dataObj != null) {
+                if (dataObj.containsKey("id")) {
+                    Object idObj = dataObj.get("id");
+                    if (idObj != null) {
+                        scheduleId = idObj.toString();
+                    }
+                } else if (dataObj.containsKey("scheduleId")) {
+                    Object scheduleIdObj = dataObj.get("scheduleId");
+                    if (scheduleIdObj != null) {
+                        scheduleId = scheduleIdObj.toString();
+                    }
+                }
+            }
+        }
+        
+        if (scheduleId == null || scheduleId.trim().isEmpty()) {
+            System.err.println("[스케줄 생성] 응답에서 scheduleId를 찾지 못함: subscriptionId=" + subscriptionId);
+            System.err.println("응답 키 목록: " + scheduleResponse.keySet());
+        }
+        
+        return scheduleId;
+    }
+
+    /**
+     * 스케줄 목록을 조회하여 해당 구독의 scheduleId 찾기 (fallback)
+     */
+    private Mono<Boolean> findScheduleIdFromSchedules(Subscription subscription) {
         PaymentMethod paymentMethod = subscription.getPaymentMethod();
         if (paymentMethod == null || paymentMethod.getCustomerUid() == null) {
+            System.err.println("[스케줄 조회] 결제 수단 또는 customerUid가 없습니다. subscriptionId=" + subscription.getSubscriptionId());
             return Mono.just(false);
         }
 
+        Long subscriptionId = subscription.getSubscriptionId();
+        String customerUid = paymentMethod.getCustomerUid();
+        
+        System.out.println("[스케줄 조회] 시작: subscriptionId=" + subscriptionId + ", customerUid=" + customerUid);
+
         return portOneClient.getAccessToken()
                 .flatMap(accessToken -> 
-                    portOneClient.getSchedules(paymentMethod.getCustomerUid(), accessToken)
-                        .flatMap(schedules -> {
-                            // 스케줄 목록에서 해당 구독의 스케줄을 찾아 삭제
-                            // PortOne API 응답 구조: { "schedules": [{ "id": "...", "metadata": {...} }] }
+                    portOneClient.getSchedules(customerUid, accessToken)
+                        .map(schedules -> {
                             @SuppressWarnings("unchecked")
                             List<Map<String, Object>> scheduleList = (List<Map<String, Object>>) schedules.get("schedules");
                             
                             if (scheduleList == null || scheduleList.isEmpty()) {
-                                return Mono.just(true); // 스케줄이 없으면 성공으로 처리
+                                System.out.println("[스케줄 조회] 스케줄 목록이 비어있습니다. subscriptionId=" + subscriptionId);
+                                return false;
                             }
 
-                            // 해당 구독의 스케줄 찾기 (metadata에 subscriptionId가 있는 경우)
-                            List<Mono<Map>> deleteOperations = new java.util.ArrayList<>();
-                            
+                            System.out.println("[스케줄 조회] 조회된 스케줄 수: " + scheduleList.size() + ", subscriptionId=" + subscriptionId);
+
+                            // 해당 구독의 스케줄 찾기
                             for (Map<String, Object> schedule : scheduleList) {
+                                String scheduleId = (String) schedule.get("id");
+                                if (scheduleId == null) {
+                                    continue;
+                                }
+                                
+                                // metadata에서 subscriptionId 확인
                                 @SuppressWarnings("unchecked")
                                 Map<String, Object> metadata = (Map<String, Object>) schedule.get("metadata");
                                 
                                 if (metadata != null) {
                                     Object subId = metadata.get("subscriptionId");
-                                    if (subId != null && subId.equals(subscription.getSubscriptionId())) {
-                                        String scheduleId = (String) schedule.get("id");
-                                        if (scheduleId != null) {
-                                            deleteOperations.add(
-                                                portOneClient.deleteSchedule(paymentMethod.getCustomerUid(), scheduleId, accessToken)
-                                            );
+                                    if (subId != null) {
+                                        // Long 타입 비교 (숫자와 문자열 모두 처리)
+                                        boolean matches = false;
+                                        if (subId instanceof Number) {
+                                            matches = ((Number) subId).longValue() == subscriptionId;
+                                        } else if (subId instanceof String) {
+                                            try {
+                                                matches = Long.parseLong((String) subId) == subscriptionId;
+                                            } catch (NumberFormatException e) {
+                                                // 무시
+                                            }
+                                        } else {
+                                            matches = subId.equals(subscriptionId);
+                                        }
+                                        
+                                        if (matches) {
+                                            // scheduleId를 찾았으면 저장
+                                            subscription.setScheduleId(scheduleId);
+                                            subscriptionRepository.save(subscription);
+                                            System.out.println("[스케줄 조회] scheduleId 찾음: subscriptionId=" + subscriptionId + 
+                                                             ", scheduleId=" + scheduleId);
+                                            return true;
                                         }
                                     }
-                                } else {
-                                    // metadata가 없으면 모든 스케줄 삭제 (안전하지 않을 수 있음)
-                                    String scheduleId = (String) schedule.get("id");
-                                    if (scheduleId != null) {
-                                        deleteOperations.add(
-                                            portOneClient.deleteSchedule(paymentMethod.getCustomerUid(), scheduleId, accessToken)
-                                        );
+                                }
+                                
+                                // paymentId 패턴으로도 확인 (fallback)
+                                String paymentId = (String) schedule.get("paymentId");
+                                if (paymentId != null) {
+                                    String expectedPattern = "schedule_" + subscriptionId + "_";
+                                    if (paymentId.startsWith(expectedPattern)) {
+                                        subscription.setScheduleId(scheduleId);
+                                        subscriptionRepository.save(subscription);
+                                        System.out.println("[스케줄 조회] scheduleId 찾음 (paymentId 패턴): subscriptionId=" + subscriptionId + 
+                                                         ", scheduleId=" + scheduleId);
+                                        return true;
                                     }
                                 }
                             }
 
-                            if (deleteOperations.isEmpty()) {
-                                return Mono.just(true);
-                            }
-
-                            // 모든 삭제 작업을 병렬로 실행
-                            return Mono.when(deleteOperations)
-                                    .then(Mono.just(true));
+                            System.out.println("[스케줄 조회] 해당 구독의 스케줄을 찾을 수 없습니다. subscriptionId=" + subscriptionId);
+                            return false;
+                        })
+                        .onErrorResume(error -> {
+                            System.err.println("[스케줄 조회] 조회 중 오류 발생: subscriptionId=" + subscriptionId + 
+                                             ", customerUid=" + customerUid + ", error=" + error.getMessage());
+                            error.printStackTrace();
+                            return Mono.just(false);
                         })
                 )
                 .onErrorReturn(false);
+    }
+
+    /**
+     * 예약결제 스케줄 삭제
+     * PortOne V2 API의 올바른 엔드포인트 사용: DELETE /payment-schedules
+     * 참고: https://developers.portone.io/api/rest-v2/payment?v=v2
+     * 
+     * 저장된 scheduleId를 직접 사용하여 삭제 요청을 보냅니다.
+     * 
+     * @return true: 스케줄 삭제 성공 또는 스케줄이 없음 (이미 삭제됨), false: 삭제 실패
+     */
+    public Mono<Boolean> deleteBillingSchedule(Subscription subscription) {
+        Long subscriptionId = subscription.getSubscriptionId();
+        String scheduleId = subscription.getScheduleId();
+        
+        System.out.println("[스케줄 삭제] 시작: subscriptionId=" + subscriptionId + ", scheduleId=" + scheduleId);
+
+        // scheduleId가 없으면 삭제할 스케줄이 없는 것으로 처리
+        if (scheduleId == null || scheduleId.trim().isEmpty()) {
+            System.out.println("[스케줄 삭제] scheduleId가 없습니다. subscriptionId=" + subscriptionId + 
+                             " (이미 삭제되었거나 생성되지 않음)");
+            return Mono.just(true); // idempotent: 스케줄이 없으면 성공으로 처리
+        }
+
+        return portOneClient.getAccessToken()
+                .flatMap(accessToken -> {
+                    // 저장된 scheduleId를 직접 사용하여 삭제 요청
+                    List<String> scheduleIdsToDelete = java.util.Collections.singletonList(scheduleId);
+                    
+                    System.out.println("[스케줄 삭제] scheduleId로 직접 삭제 시도: subscriptionId=" + subscriptionId + 
+                                     ", scheduleId=" + scheduleId);
+
+                    return portOneClient.revokePaymentSchedules(accessToken, null, scheduleIdsToDelete)
+                            .map(result -> {
+                                @SuppressWarnings("unchecked")
+                                List<String> revokedIds = (List<String>) result.get("revokedScheduleIds");
+                                if (revokedIds != null && !revokedIds.isEmpty()) {
+                                    System.out.println("[스케줄 삭제] 삭제 성공: subscriptionId=" + subscriptionId + 
+                                                     ", scheduleId=" + scheduleId + 
+                                                     ", revokedScheduleIds=" + revokedIds);
+                                }
+                                return true;
+                            })
+                            .doOnSuccess(result -> 
+                                System.out.println("[스케줄 삭제] 삭제 완료: subscriptionId=" + subscriptionId + 
+                                                 ", scheduleId=" + scheduleId))
+                            .onErrorResume(error -> {
+                                String errorMsg = error.getMessage();
+                                boolean is404 = error instanceof WebClientResponseException.NotFound ||
+                                                (errorMsg != null && (errorMsg.contains("404") || 
+                                                                      errorMsg.contains("Not Found") ||
+                                                                      errorMsg.contains("not found")));
+                                
+                                if (is404) {
+                                    System.out.println("[스케줄 삭제] 스케줄이 이미 삭제됨 (404): subscriptionId=" + subscriptionId + 
+                                                     ", scheduleId=" + scheduleId);
+                                    return Mono.just(true); // 404는 이미 삭제된 것으로 처리 (idempotent)
+                                }
+                                
+                                System.err.println("[스케줄 삭제] 삭제 중 오류: subscriptionId=" + subscriptionId + 
+                                                  ", scheduleId=" + scheduleId + 
+                                                  ", error=" + errorMsg);
+                                error.printStackTrace();
+                                return Mono.just(false); // 삭제 실패 시 false 반환
+                            });
+                })
+                .onErrorReturn(false)
+                .doOnSuccess(result -> {
+                    if (result) {
+                        System.out.println("[스케줄 삭제] 프로세스 완료: subscriptionId=" + subscriptionId + 
+                                         " (삭제 성공 또는 스케줄 없음)");
+                    } else {
+                        System.err.println("[스케줄 삭제] 프로세스 실패: subscriptionId=" + subscriptionId);
+                    }
+                });
     }
 }
 

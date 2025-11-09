@@ -62,6 +62,9 @@ public class Subscription {
     @Column(name = "ended_at")
     private LocalDateTime endedAt;
 
+    @Column(name = "schedule_id", length = 255)
+    private String scheduleId; // PortOne 예약결제 스케줄 ID
+
     @OneToMany(mappedBy = "subscription", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
     @JsonManagedReference
     private List<SubscriptionInvoice> invoices;
