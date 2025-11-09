@@ -109,3 +109,31 @@
 - 결제 완료 및 취소 시 멤버십 등급이 자동으로 갱신됩니다
 - `point-payment.html`에서 실제로 호출하는 API만 포함되어 있습니다
 - **인증 구현 가이드**: `point-payment-implementation.md`의 "7. 인증 기능 추가하기" 섹션 참고
+
+
+# 방법 1: jq를 사용하여 token 필드만 추출 (권장)
+TOKEN=$(curl -s -X POST "http://localhost:7000/api/auth/login" \
+-H "Content-Type: application/json" \
+-d '{"email":"test@test1.com","password":"1234qwer"}' | jq -r '.token')
+
+# 방법 2: jq가 없는 경우 - grep과 sed를 사용
+# TOKEN=$(curl -s -X POST "http://localhost:7000/api/auth/login" \
+# -H "Content-Type: application/json" \
+# -d '{"email":"test@test1.com","password":"1234qwer"}' | grep -o '"token":"[^"]*' | sed 's/"token":"//')
+
+# 방법 3: Python을 사용 (jq가 없는 경우)
+# TOKEN=$(curl -s -X POST "http://localhost:7000/api/auth/login" \
+# -H "Content-Type: application/json" \
+# -d '{"email":"test@test1.com","password":"1234qwer"}' | python3 -c "import sys, json; print(json.load(sys.stdin)['token'])")
+
+# 토큰 확인 (디버깅용)
+echo "Token: $TOKEN"
+
+# 결제 취소 요청
+curl -X POST "http://localhost:7000/api/payments/cancel" \
+-H "Content-Type: application/json" \
+-H "Authorization: Bearer $TOKEN" \
+-d '{
+  "paymentId": "payment-1762679590213",
+  "reason": "고객 요청에 의한 취소"
+}'
