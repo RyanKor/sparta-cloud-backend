@@ -54,3 +54,5 @@ jobs:
             ${{ env.DOCKER_IMAGE_NAME }}:latest
           cache-from: type=registry,ref=${{ env.DOCKER_IMAGE_NAME }}:latest
           cache-to: type=inline
+
+          #asd
